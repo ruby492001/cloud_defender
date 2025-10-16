@@ -10,7 +10,7 @@ import {
 } from "../utils/tree";
 import { createDriveFolder } from "../api/drive";
 
-export default function FolderUploader({ accessToken, uploadManager }) {
+export default function FolderUploader({ accessToken, uploadManager, className = "" }) {
     const inputRef = useRef(null);
 
     useEffect(() => {
@@ -32,7 +32,7 @@ export default function FolderUploader({ accessToken, uploadManager }) {
 
         const rootName = getSelectionRootFolderName(files);
         if (!rootName) {
-            alert("Браузер не вернул относительные пути. Попробуй Chromium или включи dirpicker в Firefox.");
+            alert("Unable to detect the root folder. Chromium requires the directory picker flag in Firefox.");
             return;
         }
 
@@ -62,15 +62,14 @@ export default function FolderUploader({ accessToken, uploadManager }) {
         uploadManager.addTasks(tasks);
     }
 
+    const buttonClass = ["btn secondary", className].filter(Boolean).join(" ");
+
     return (
-        <div>
+        <>
             <input ref={inputRef} type="file" style={{ display: "none" }} onChange={onChange} />
-            <button
-                onClick={openPicker}
-                style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #ddd", background: "white", cursor: "pointer" }}
-            >
-                Загрузить папку в Google Drive (сохранить структуру)
+            <button type="button" className={buttonClass} onClick={openPicker}>
+                Upload folder
             </button>
-        </div>
+        </>
     );
 }

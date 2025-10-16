@@ -179,33 +179,6 @@ export function DownloadProvider({ api, children }){
     return (
         <DownloadCtx.Provider value={value}>
             {children}
-            {(dockVisible || hasVisible) && hasVisible && (
-                <div className="progress-dock">
-                    <div className="progress-head">
-                        <div style={{ fontWeight:700 }}>Загрузки</div>
-                        <div className="progress-actions">
-                            <button className="btn" onClick={()=> clearFinished()}>Очистить завершённые</button>
-                            <button className="btn" onClick={()=> setDockVisible(false)}>Закрыть</button>
-                        </div>
-                    </div>
-                    {visibleTasks.map(t => (
-                        <div key={t.id} className="progress-item">
-                            <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center' }}>
-                                <div style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                                    {t.name}{t.kind==='folder' ? ' (папка)' : ''}
-                                </div>
-                                <div className="badge" style={{ textTransform:'capitalize' }}>{t.status}</div>
-                            </div>
-                            <div className="progress" style={{ marginTop:6 }}><div style={{ width: `${t.progress||0}%` }} /></div>
-                            {t.error && <div style={{ color:'var(--danger)', fontSize:12, marginTop:4 }}>{t.error}</div>}
-                            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:6 }}>
-                                {t.status==='running' && <button className="btn" onClick={()=> cancel(t.id)}>Остановить</button>}
-                                {(t.status==='queued'||t.status==='error'||t.status==='canceled'||t.status==='done') && <button className="btn" onClick={()=> remove(t.id)}>Удалить из списка</button>}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
         </DownloadCtx.Provider>
     )
 }
