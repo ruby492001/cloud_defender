@@ -1,9 +1,11 @@
 // Хук-агрегатор логики: тек. папка, список, пагинация, поиск, сортировка, хлебные крошки
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DriveApi } from '../api/drive.js'
+import GoogleCryptoApi from '../api/GoogleCryptoApi.js'
 
 export function useDrive(token){
-    const api = useMemo(()=> new DriveApi(token), [token])
+    const coreApi = useMemo(()=> new DriveApi(token), [token])
+    const api = useMemo(()=> new GoogleCryptoApi(coreApi), [coreApi])
 
     // Навигация
     const [currentFolder, setCurrentFolder] = useState('root')

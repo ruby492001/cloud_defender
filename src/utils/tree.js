@@ -1,6 +1,4 @@
 // src/utils/tree.js
-import { createDriveFolder } from "../api/drive";
-
 export function getRelativePath(file) {
     return file.webkitRelativePath && file.webkitRelativePath.length > 0 ? file.webkitRelativePath : file.name;
 }
@@ -32,14 +30,14 @@ export function collectFolderPaths(files, rootName = null) {
     return folders;
 }
 
-export async function ensureDriveFolders({ accessToken, folderPaths, rootId }) {
+export async function ensureDriveFolders({ api, folderPaths, rootId }) {
     const map = new Map();
     const ordered = Array.from(folderPaths).sort((a, b) => a.split("/").length - b.split("/").length);
     for (const path of ordered) {
         const parts = path.split("/");
         const name = parts[parts.length - 1];
         const parentId = parts.length > 1 ? map.get(parts.slice(0, -1).join("/")) || rootId : rootId;
-        const folder = await createDriveFolder({ accessToken, name, parentId });
+        const folder = await api.createFolder(name, parentId);
         map.set(path, folder.id);
     }
     return map;

@@ -1,4 +1,4 @@
-﻿import React, { useLayoutEffect, useMemo, useRef } from "react";
+import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 const arrowUpIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'><path d='M12 4l7 7h-4v9h-6v-9H5z'/></svg>";
 const arrowDownIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2322c55e'><path d='M12 20l-7-7h4V4h6v9h4z'/></svg>";
@@ -12,6 +12,7 @@ const styles = {
         maxWidth: "calc(100vw - 24px)",
         maxHeight: "70vh",
         overflowY: "auto",
+        overflowX: "hidden",
         background: "#0f172a",
         border: "1px solid #263244",
         borderRadius: 12,
@@ -23,7 +24,36 @@ const styles = {
         gap: 16,
         zIndex: 1600,
     },
-    header: {
+    collapsedContainer: {
+        position: "fixed",
+        right: 16,
+        bottom: 16,
+        width: 280,
+        maxWidth: "calc(100vw - 24px)",
+        background: "#0f172a",
+        border: "1px solid #263244",
+        borderRadius: 12,
+        padding: "10px 14px",
+        boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
+        color: "#e5e7eb",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        zIndex: 1600,
+        cursor: "pointer",
+    },
+    collapsedSummary: {
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        fontSize: 13,
+    },
+    collapsedActions: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+    },    header: {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
@@ -91,12 +121,16 @@ const styles = {
         gap: 10,
         flex: 1,
         minWidth: 0,
+        overflow: "hidden",
     },
     name: {
         fontSize: 13,
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
+        flex: 1,
+        minWidth: 0,
+        display: "block",
     },
     badge: {
         padding: "2px 8px",
@@ -105,6 +139,15 @@ const styles = {
         textTransform: "capitalize",
         border: "1px solid rgba(148, 163, 184, 0.35)",
         color: "#94a3b8",
+        whiteSpace: "nowrap",
+        display: "inline-flex",
+        alignItems: "center",
+    },
+    status: {
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        marginLeft: 8,
     },
     progress: {
         width: "100%",
@@ -133,6 +176,41 @@ const styles = {
         background: "rgba(148,163,184,0.2)",
     },
 };
+
+const MAX_NAME_LENGTH = 40;
+const VISIBLE_NAME_LENGTH = 37;
+function truncateName(name = "") {
+    if (typeof name !== "string") return "";
+    return name.length > MAX_NAME_LENGTH ? `${name.slice(0, VISIBLE_NAME_LENGTH)}...` : name;
+}
+
+function formatEta(seconds) {
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const total = Math.round(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const parts = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (parts.length < 2 && hours === 0 && secs > 0) {
+        parts.push(`${secs}s`);
+    }
+    if (parts.length === 0) {
+        parts.push(`${secs}s`);
+    }
+    return `~${parts.join(" ")}`;
+}
+
+function computeGroupEta(tasks) {
+    if (!tasks || tasks.length === 0) return null;
+    const candidates = tasks
+        .filter((task) => ["queued", "init", "uploading"].includes(task.status))
+        .map((task) => task.etaSeconds)
+        .filter((eta) => Number.isFinite(eta) && eta > 0);
+    if (candidates.length === 0) return null;
+    return Math.max(...candidates);
+}
 
 const noop = () => {};
 
@@ -199,11 +277,76 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
 
     const containerRef = useRef(null);
     const scrollSnapshot = useRef(0);
+    const [collapsed, setCollapsed] = useState(false);
 
-    const hasUploads = !uploadsHidden && (uploadGroups.length > 0 || uploadTasks.length > 0);
+    const soloUploadTasks = useMemo(() => uploadTasks.filter((task) => !task.groupId), [uploadTasks]);
+    const groupedUploadTasks = useMemo(() => {
+        const map = new Map();
+        uploadTasks.forEach((task) => {
+            if (!task.groupId) return;
+            const list = map.get(task.groupId);
+            if (list) {
+                list.push(task);
+            } else {
+                map.set(task.groupId, [task]);
+            }
+        });
+        return map;
+    }, [uploadTasks]);
+    const groupEtaMap = useMemo(() => {
+        const map = new Map();
+        groupedUploadTasks.forEach((tasks, groupId) => {
+            const eta = computeGroupEta(tasks);
+            if (eta !== null) {
+                map.set(groupId, eta);
+            }
+        });
+        return map;
+    }, [groupedUploadTasks]);
+    const groupProgressMap = useMemo(() => {
+        const stats = new Map();
+        uploadGroups.forEach((group) => {
+            stats.set(group.id, {
+                totalBytes: 0,
+                uploadedBytes: 0,
+                percent: group.percent ?? 0,
+                done: group.done ?? 0,
+                total: group.total ?? 0,
+                failed: group.failed ?? 0,
+                cancelled: group.cancelled ?? 0,
+            });
+        });
+        uploadTasks.forEach((task) => {
+            if (!task.groupId) return;
+            const entry = stats.get(task.groupId);
+            if (!entry) return;
+            const size = Number(task.size || 0) || 0;
+            entry.totalBytes += size;
+            const uploadedBytes = Math.min(size, Number(task.uploadedBytes || 0) || 0);
+            if (task.status === "done") {
+                entry.uploadedBytes += size;
+            } else {
+                entry.uploadedBytes += uploadedBytes;
+            }
+        });
+        stats.forEach((entry, id) => {
+            if (entry.totalBytes > 0) {
+                entry.percent = Math.min(100, Math.round((entry.uploadedBytes / entry.totalBytes) * 100));
+            }
+        });
+        return stats;
+    }, [uploadGroups, uploadTasks]);
+
+    const hasUploads = !uploadsHidden && (uploadGroups.length > 0 || soloUploadTasks.length > 0);
     const hasDownloads = downloadsVisible && downloadTasks.length > 0;
 
-    const totalItems = uploadTasks.length + uploadGroups.length + downloadTasks.length;
+    const totalItems = soloUploadTasks.length + uploadGroups.length + downloadTasks.length;
+    const activeUploadTasks = soloUploadTasks.filter((t) => !["done", "cancelled", "error"].includes(t.status)).length;
+    const activeUploadGroups = uploadGroups.filter((g) => (g.done + g.failed + g.cancelled) < g.total).length;
+    const activeDownloadTasks = downloadTasks.filter((t) => !["done", "canceled", "error"].includes(t.status)).length;
+    const activeTransfers = activeUploadTasks + activeUploadGroups + activeDownloadTasks;
+    const canDismiss = activeTransfers === 0;
+
 
     const fingerprint = useMemo(
         () =>
@@ -237,8 +380,60 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         return () => el.removeEventListener("scroll", handle);
     }, []);
 
+    const summaryLabel = activeTransfers > 0 ? `${activeTransfers} active` : `${totalItems} items`;
+    const handleDismiss = () => {
+        onClose?.();
+        onHide?.();
+        setCollapsed(false);
+    };
+
     if (!hasUploads && !hasDownloads) {
         return null;
+    }
+
+    if (collapsed) {
+        return (
+            <div
+                style={styles.collapsedContainer}
+                onClick={() => setCollapsed(false)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") setCollapsed(false);
+                }}
+            >
+                <div style={styles.collapsedSummary}>
+                    <span>Transfers</span>
+                    <span style={{ color: "#94a3b8" }}>{summaryLabel}</span>
+                </div>
+                <div style={styles.collapsedActions}>
+                    <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setCollapsed(false);
+                        }}
+                        aria-label="Expand transfers"
+                    >
+                        ▲
+                    </button>
+                    <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={!canDismiss}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!canDismiss) return;
+                            handleDismiss();
+                        }}
+                        aria-label="Close transfers"
+                    >
+                        ✕
+                    </button>
+                </div>
+            </div>
+        );
     }
 
     return (
@@ -248,7 +443,23 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                     <div style={styles.headerTitle}>File Transfers</div>
                     <div style={styles.headerCaption}>Uploads to Drive and downloads to this device</div>
                 </div>
-                <div style={{ fontSize: 12, color: "#94a3b8" }}>{totalItems} items</div>
+                <div style={styles.collapsedActions}>
+                    <div style={{ fontSize: 12, color: "#94a3b8" }}>{summaryLabel}</div>
+                    <button className="btn ghost" type="button" onClick={() => setCollapsed(true)}>
+                        Collapse
+                    </button>
+                    <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={!canDismiss}
+                        onClick={() => {
+                            if (!canDismiss) return;
+                            handleDismiss();
+                        }}
+                    >
+                        Close
+                    </button>
+                </div>
             </div>
 
             {hasUploads && (
@@ -287,25 +498,39 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
 
                         const barStyle = {
                             ...styles.progressFill,
-                            width: `${Math.min(100, percent || 0)}%`,
+                            width: "0%",
                             background: failed > 0 ? "#facc15" : barColor(label === "Done" ? "done" : "uploading", "upload"),
                         };
+                        const groupFinished = finished >= total && total > 0;
+                        const progressEntry = groupProgressMap.get(id);
+                        const computedPercent = Math.min(100, progressEntry?.percent ?? percent ?? 0);
+                        barStyle.width = `${computedPercent}%`;
+                        const groupEtaSeconds = groupEtaMap.get(id);
+                        const groupEtaLabel = formatEta(groupEtaSeconds);
+                        const hasByteStats = (progressEntry?.totalBytes ?? 0) > 0;
+
+                        const rawGroupName = name || "Upload batch";
+                        const displayGroupName = truncateName(rawGroupName);
 
                         return (
                             <div key={id || `group-${name}`} style={styles.groupCard}>
                                 <div style={styles.row}>
                                     <div style={styles.taskMain}>
                                         <img alt="Upload group" src={arrowUpIcon} style={styles.icon} />
-                                        <div style={styles.name} title={name}>
-                                            {name || "Upload batch"}
+                                        <div style={styles.name} title={rawGroupName}>
+                                            {displayGroupName}
                                         </div>
                                     </div>
-                                    <span style={styles.badge}>{label}</span>
+                                    <div style={styles.status}>
+                                        <span style={styles.badge}>{label}</span>
+                                    </div>
                                 </div>
                                 <div style={styles.meta}>
                                     <span>
                                         Files {done}/{total}
                                     </span>
+                                    {hasByteStats && <span>Progress {computedPercent}%</span>}
+                                    {groupEtaLabel && <span>ETA {groupEtaLabel}</span>}
                                     {failed > 0 && <span style={styles.error}>Errors {failed}</span>}
                                     {cancelled > 0 && <span>Canceled {cancelled}</span>}
                                 </div>
@@ -313,10 +538,18 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                     <div style={barStyle} />
                                 </div>
                                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                                    <button className="btn ghost" onClick={() => onCancelGroup(id)}>
+                                    <button className="btn ghost" type="button" onClick={() => onCancelGroup(id)}>
                                         Cancel
                                     </button>
-                                    <button className="btn secondary" onClick={() => onRemoveGroup(id)}>
+                                    <button
+                                        className="btn secondary"
+                                        type="button"
+                                        disabled={!groupFinished}
+                                        onClick={() => {
+                                            if (!groupFinished) return;
+                                            onRemoveGroup(id);
+                                        }}
+                                    >
                                         Remove
                                     </button>
                                 </div>
@@ -324,55 +557,60 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                         );
                     })}
 
-                    {uploadTasks
-                        .filter((task) => !task.groupId)
-                        .map((task) => {
-                            const { id, name, status, percent = 0, error } = task;
-                            const canCancel = ["queued", "init", "uploading"].includes(status);
-                            const canRemove = ["done", "cancelled", "error"].includes(status);
-                            return (
-                                <div key={id} style={styles.taskCard}>
-                                    <div style={styles.row}>
-                                        <div style={styles.taskMain}>
-                                            <img alt="Upload task" src={arrowUpIcon} style={styles.icon} />
-                                            <div style={styles.name} title={name}>
-                                                {name}
-                                            </div>
+                    {soloUploadTasks.map((task) => {
+                        const { id, name, status, percent = 0, error, etaSeconds } = task;
+                        const rawName = name || "Untitled";
+                        const displayName = truncateName(rawName);
+                        const canCancel = ["queued", "init", "uploading"].includes(status);
+                        const canRemove = ["done", "cancelled", "error"].includes(status);
+                        const safePercent = Math.min(100, Math.max(0, percent));
+                        const etaLabel = formatEta(etaSeconds);
+                        return (
+                            <div key={id} style={styles.taskCard}>
+                                <div style={styles.row}>
+                                    <div style={styles.taskMain}>
+                                        <img alt="Upload task" src={arrowUpIcon} style={styles.icon} />
+                                        <div style={styles.name} title={rawName}>
+                                            {displayName}
                                         </div>
+                                    </div>
+                                    <div style={styles.status}>
                                         <span style={{ ...styles.badge, borderColor: "rgba(99,102,241,0.35)", color: "#c7d2fe" }}>
                                             {uploadStatusLabel(status)}
                                         </span>
                                     </div>
-                                    <div style={styles.progress}>
-                                        <div
-                                            style={{
-                                                ...styles.progressFill,
-                                                width: `${status === "queued" ? 0 : Math.min(100, percent)}%`,
-                                                background: barColor(status, "upload"),
-                                            }}
-                                        />
-                                    </div>
-                                    <div style={styles.meta}>
-                                        <span>
-                                            {uploadStatusLabel(status)} - {Math.min(100, Math.max(0, percent))}%
-                                        </span>
-                                        {error && <span style={styles.error}>{error}</span>}
-                                    </div>
-                                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                                        {canCancel && (
-                                            <button className="btn ghost" onClick={() => onCancelTask(id)}>
-                                                Cancel
-                                            </button>
-                                        )}
-                                        {canRemove && (
-                                            <button className="btn secondary" onClick={() => onRemoveTask(id)}>
-                                                Remove
-                                            </button>
-                                        )}
-                                    </div>
                                 </div>
-                            );
-                        })}
+                                <div style={styles.progress}>
+                                    <div
+                                        style={{
+                                            ...styles.progressFill,
+                                            width: `${status === "queued" ? 0 : safePercent}%`,
+                                            background: barColor(status, "upload"),
+                                        }}
+                                    />
+                                </div>
+                                <div style={styles.meta}>
+                                    <span>
+                                        {uploadStatusLabel(status)} - {safePercent}%
+                                    </span>
+                                    {etaLabel && <span>ETA {etaLabel}</span>}
+                                    {error && <span style={styles.error}>{error}</span>}
+                                </div>
+                                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                                    {canCancel && (
+                                        <button className="btn ghost" type="button" onClick={() => onCancelTask(id)}>
+                                            Cancel
+                                        </button>
+                                    )}
+                                    {canRemove && (
+                                        <button className="btn secondary" type="button" onClick={() => onRemoveTask(id)}>
+                                            Remove
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 
@@ -386,32 +624,38 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                             <span>Downloads</span>
                         </div>
                         <div style={styles.sectionActions}>
-                            <button className="btn ghost" onClick={onClearFinished}>
+                            <button className="btn ghost" type="button" onClick={onClearFinished}>
                                 Clear finished
                             </button>
-                            <button className="btn ghost" onClick={onHide}>
+                            <button className="btn ghost" type="button" onClick={onHide}>
                                 Hide
                             </button>
                         </div>
                     </div>
 
                     {downloadTasks.map((task) => {
-                        const { id, name, progress = 0, status, kind, error } = task;
+                        const { id, name, progress = 0, status, kind, error, etaSeconds } = task;
+                        const rawName = name || "Untitled";
+                        const displayName = truncateName(rawName);
                         const subtitle = kind === "folder" ? "Folder (zip)" : "File";
                         const canCancel = status === "running";
-                        const canRemove = ["queued", "error", "canceled", "done"].includes(status);
+                        const canRemove = ["error", "canceled", "done"].includes(status);
+                        const safeProgress = Math.min(100, Math.max(0, progress || 0));
+                        const etaLabel = formatEta(etaSeconds);
                         return (
                             <div key={id} style={styles.taskCard}>
                                 <div style={styles.row}>
                                     <div style={styles.taskMain}>
                                         <img alt="Download task" src={arrowDownIcon} style={styles.icon} />
-                                        <div style={styles.name} title={name}>
-                                            {name}
+                                        <div style={styles.name} title={rawName}>
+                                            {displayName}
                                         </div>
                                     </div>
-                                    <span style={{ ...styles.badge, borderColor: "rgba(34,197,94,0.35)", color: "#bbf7d0" }}>
-                                        {downloadStatusLabel(status)}
-                                    </span>
+                                    <div style={styles.status}>
+                                        <span style={{ ...styles.badge, borderColor: "rgba(34,197,94,0.35)", color: "#bbf7d0" }}>
+                                            {downloadStatusLabel(status)}
+                                        </span>
+                                    </div>
                                 </div>
                                 <div style={styles.meta}>
                                     <span>{subtitle}</span>
@@ -421,24 +665,25 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                     <div
                                         style={{
                                             ...styles.progressFill,
-                                            width: `${Math.min(100, progress || 0)}%`,
+                                            width: `${safeProgress}%`,
                                             background: barColor(status, "download"),
                                         }}
                                     />
                                 </div>
                                 <div style={styles.meta}>
                                     <span>
-                                        {downloadStatusLabel(status)} - {Math.min(100, Math.max(0, progress || 0))}%
+                                        {downloadStatusLabel(status)} - {safeProgress}%
                                     </span>
+                                    {etaLabel && <span>ETA {etaLabel}</span>}
                                 </div>
                                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                                     {canCancel && (
-                                        <button className="btn ghost" onClick={() => onCancel(id)}>
+                                        <button className="btn ghost" type="button" onClick={() => onCancel(id)}>
                                             Cancel
                                         </button>
                                     )}
                                     {canRemove && (
-                                        <button className="btn secondary" onClick={() => onRemove(id)}>
+                                        <button className="btn secondary" type="button" onClick={() => onRemove(id)}>
                                             Remove
                                         </button>
                                     )}
@@ -451,6 +696,3 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         </div>
     );
 }
-
-
-

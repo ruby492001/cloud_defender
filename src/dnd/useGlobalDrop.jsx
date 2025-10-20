@@ -1,6 +1,5 @@
-// src/dnd/useGlobalDrop.js
+﻿// src/dnd/useGlobalDrop.js
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createDriveFolder } from "../api/drive";
 import {
     collectFolderPaths,
     ensureDriveFolders,
@@ -8,15 +7,7 @@ import {
     stripRootFromPath,
 } from "../utils/tree";
 
-/**
- * Глобальный drag & drop: файлы + папки, без видимого дроп-зоны.
- * Работает на всех DOM-участках страницы.
- * - Chromium: рекурсивно обходим папки через webkitGetAsEntry().
- * - Fallback: используем dataTransfer.files (структуру папок в FF сохранить нельзя).
- *
- * Возвращает { isOver } для опциональной подсказки.
- */
-export default function useGlobalDrop({ accessToken, uploadManager }) {
+export default function useGlobalDrop({ api, uploadManager }) {
     const [isOver, setIsOver] = useState(false);
     const dragDepthRef = useRef(0);
 
@@ -30,7 +21,6 @@ export default function useGlobalDrop({ accessToken, uploadManager }) {
     }, []);
 
     const prevent = useCallback((e) => {
-        // Разрешаем дроп в любом месте
         e.preventDefault?.();
         e.stopPropagation?.();
     }, []);
@@ -43,7 +33,6 @@ export default function useGlobalDrop({ accessToken, uploadManager }) {
 
     const onDragOver = useCallback((e) => {
         prevent(e);
-        // можно добавить эффекты курсора
     }, [prevent]);
 
     const onDragLeave = useCallback((e) => {
@@ -60,25 +49,22 @@ export default function useGlobalDrop({ accessToken, uploadManager }) {
         const dt = e.dataTransfer;
         if (!dt) return;
 
-        // 1) Chromium путь: webkitGetAsEntry
-        if (dt.items && typeof dt.items[0]?.webkitGetAsEntry === "function") {
+        if (dt.items && typeof dt.items[0]?.webkitGetAsEntry === "function" && hasWebkitEntries) {
             const entries = [];
             for (let i = 0; i < dt.items.length; i++) {
                 const entry = dt.items[i].webkitGetAsEntry?.();
                 if (entry) entries.push(entry);
             }
-            const items = await gatherFromWebkitEntries(entries); // [{file, relPath}]
-            await handleCollectedEntries(items, { accessToken, uploadManager });
+            const items = await gatherFromWebkitEntries(entries);
+            await handleCollectedEntries(items, { api, uploadManager });
             return;
         }
 
-        // 2) Fallback: просто файлы (структуры нет)
         const files = Array.from(dt.files ?? []).map((f) => ({ file: f, relPath: f.name }));
-        await handleCollectedEntries(files, { accessToken, uploadManager });
-    }, [prevent, accessToken, uploadManager]);
+        await handleCollectedEntries(files, { api, uploadManager });
+    }, [prevent, api, uploadManager, hasWebkitEntries]);
 
     useEffect(() => {
-        // Слушатели на весь документ/окно
         const w = window;
         const d = document;
 
@@ -87,7 +73,6 @@ export default function useGlobalDrop({ accessToken, uploadManager }) {
         w.addEventListener("dragleave", onDragLeave, { passive: false, capture: true });
         w.addEventListener("drop", onDrop, { passive: false, capture: true });
 
-        // Блокируем дефолт браузера (например, открытие файла вместо страницы)
         d.addEventListener("dragover", prevent, { passive: false, capture: true });
         d.addEventListener("drop", prevent, { passive: false, capture: true });
 
@@ -104,8 +89,6 @@ export default function useGlobalDrop({ accessToken, uploadManager }) {
 
     return { isOver };
 }
-
-/* ───────────────────────── helpers ───────────────────────── */
 
 async function gatherFromWebkitEntries(entries) {
     const out = [];
@@ -140,10 +123,9 @@ async function gatherFromWebkitEntries(entries) {
     return out;
 }
 
-async function handleCollectedEntries(items, { accessToken, uploadManager }) {
+async function handleCollectedEntries(items, { api, uploadManager }) {
     if (!items.length) return;
 
-    // singles = файлы в корне, byRoot — сгруппированные по первому сегменту (папки)
     const singles = [];
     const byRoot = new Map();
 
@@ -158,45 +140,45 @@ async function handleCollectedEntries(items, { accessToken, uploadManager }) {
         }
     }
 
-    // 1) Одиночные — в корень
     if (singles.length) {
         const now = Date.now();
-        const tasks = singles.map((f, i) => ({
-            id: `${now}_${i}_${f.name}_${f.size}`,
-            file: f,
-            name: f.name,
-            size: f.size,
-            type: f.type || "application/octet-stream",
-            parentId: undefined,
-        }));
-        uploadManager.addTasks(tasks);
+        singles.forEach((f, i) => {
+            uploadManager.addTasks([
+                {
+                    id: `${now}_${i}_${f.name}_${f.size}`,
+                    file: f,
+                    name: f.name,
+                    size: f.size,
+                    type: f.type || "application/octet-stream",
+                    parentId: undefined,
+                },
+            ]);
+        });
     }
 
-    // 2) Папки — для каждого корня созд. структуру на Диске и группу
     for (const [rootName, list] of byRoot.entries()) {
-        const root = await createDriveFolder({ accessToken, name: rootName, parentId: undefined });
-
+        const root = await api.createFolder(rootName, undefined);
         const pseudoList = list.map(({ relPath }) => ({ webkitRelativePath: relPath }));
         const folderPaths = collectFolderPaths(pseudoList, rootName);
-        const subMap = await ensureDriveFolders({ accessToken, folderPaths, rootId: root.id });
+        const subMap = await ensureDriveFolders({ api, folderPaths, rootId: root.id });
 
         const groupId = uploadManager.createGroup({ type: "folder", name: rootName, total: list.length });
-
         const now = Date.now();
-        const tasks = list.map(({ file, relPath }, i) => {
+
+        list.forEach(({ file, relPath }, i) => {
             const trimmed = stripRootFromPath(relPath, rootName);
             const parentId = resolveParentIdForFile(trimmed, subMap, root.id);
-            return {
-                id: `${now}_${i}_${file.name}_${file.size}`,
-                file,
-                name: file.name,
-                size: file.size,
-                type: file.type || "application/octet-stream",
-                parentId,
-                groupId,
-            };
+            uploadManager.addTasks([
+                {
+                    id: `${now}_${i}_${file.name}_${file.size}`,
+                    file,
+                    name: file.name,
+                    size: file.size,
+                    type: file.type || "application/octet-stream",
+                    parentId,
+                    groupId,
+                },
+            ]);
         });
-
-        uploadManager.addTasks(tasks);
     }
 }

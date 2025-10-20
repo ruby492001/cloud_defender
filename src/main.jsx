@@ -6,7 +6,7 @@ import {GoogleOAuthProvider} from "@react-oauth/google";
 
 const CLIENT_ID = "37619748711-r9mango8rmvoj0o19obcsgjkjgv2bp53.apps.googleusercontent.com";
 
-// Р’РЎРўР РђРР’РђР•Рњ РЎРўРР›Р РР— JS (Р±РµР· РѕС‚РґРµР»СЊРЅРѕРіРѕ CSS)
+// Inject shared styles via JS (keeps layout consistent without a standalone CSS file)
 const style = document.createElement('style')
 style.innerHTML = `
   :root { --bg:#0b0e12; --panel:#121821; --muted:#6b7280; --text:#e5e7eb; --accent:#3b82f6; --danger:#ef4444; --success:#22c55e; }
@@ -20,7 +20,9 @@ style.innerHTML = `
   .toolbar-actions{ display:flex; align-items:center; gap:.5rem; }
   .btn{ display:inline-flex; align-items:center; justify-content:center; gap:.35rem; background:#1f2937; color:var(--text); border:1px solid #263244; border-radius:.65rem; padding:.5rem 1rem; font-size:14px; font-weight:500; line-height:1.1; transition:background .2s ease, border-color .2s ease, color .2s ease; }
   .btn:hover{ background:#1f2a3a; border-color:#334155; }
+  .btn:disabled{ opacity:.5; cursor:not-allowed; background:#1f2937; border-color:#334155; color:#94a3b8; }
   .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  .btn.primary:disabled{ background:#3b82f6; color:rgba(255,255,255,0.6); }
   .btn.primary:hover{ background:#2563eb; border-color:#2563eb; }
   .btn.secondary{ background:#1f2937; border-color:#334155; color:var(--text); }
   .btn.secondary:hover{ background:#273244; }
@@ -65,6 +67,7 @@ createRoot(document.getElementById('root')).render(
       </GoogleOAuthProvider>
   </StrictMode>,
 )
+
 
 
 

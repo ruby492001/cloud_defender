@@ -1,17 +1,18 @@
-import {useEffect, useState, useCallback, useRef, useMemo} from "react";
+﻿import {useEffect, useState, useCallback, useRef, useMemo} from "react";
 import { useGoogleLogin, hasGrantedAllScopesGoogle } from "@react-oauth/google";
 import FileUploader from "./components/FileUploader";
 import FolderUploader from "./components/FolderUploader";
-import useUploadManager from "./logic/useUploadManager";
-import useGlobalDrop from "./dnd/useGlobalDrop.jsx";
-import DropHintOverlay from "./components/DropHintOverlay.jsx";
-import {useDrive} from "./hooks/useDrive.js";
-import {DownloadProvider, useDownload} from "./state/DownloadManager.jsx";
 import Toolbar from "./components/Toolbar.jsx";
 import FileRow from "./components/FileRow.jsx";
 import MoveCopyDialog from "./components/MoveCopyDialog.jsx";
 import ContextMenu from "./components/ContextMenu.jsx";
 import TransferTray from "./components/TransferTray.jsx";
+import useUploadManager from "./logic/useUploadManager";
+import useGlobalDrop from "./dnd/useGlobalDrop.jsx";
+import DropHintOverlay from "./components/DropHintOverlay.jsx";
+import {useDrive} from "./hooks/useDrive.js";
+import {DownloadProvider, useDownload} from "./state/DownloadManager.jsx";
+import { BusyProvider, useBusy } from "./components/BusyOverlay.jsx";
 
 const scopes = ["openid",
                         "email",
@@ -31,7 +32,7 @@ function onSuccessLogin(tokenResponse) {
     return false;
 }
 
-const accessToken = "ya29.a0AQQ_BDRkANR8YuezY-mP6wuBSVSCKpluSoasp_5Rqh4PDpVo1iMt-Wth5--uyDCpGOKqI-Lr55jHBu44p5lQ5Z5xtmz_h4KmoBT6uOALh8gp0sQ13WqG3O8n58YRzgpk5GeuVVKlq96JRsyQ7yilFfsuBY56mDqT5OqHxcDhCvEBDnz8W7LkB1KaQhQU0l_cUrjUeNG3aCgYKAZMSARASFQHGX2Mi_S0LMOr98XrE4SgWSORSog0207"
+const accessToken = "ya29.a0AQQ_BDRv2cj90wbpMOwVPpQadlMzjmzFpY1aHR5JqcN-anUygXr3Jc-bnYDZJwmzYI6SogrmMBbqEI4QrqgpQOW9kCaYZnQmIF12P3T-Zrf_9CkUkcepLndKXx8rK5K1fYG_t40exfZwUdE9_OqYmnM4ZNcRx9aYb8Jho-z8JcmPrC9NxZhQNT_NBE6ls5FI_zQ3lSUaCgYKAR0SARUSFQHGX2Mi61YmBITuA5uQsibknOJo5g0206"
 
 export default function App() {
     const drive = useDrive(accessToken)
@@ -48,12 +49,13 @@ export default function App() {
     }
 
     const uploadManager = useUploadManager({
-        accessToken,
-        chunkSize: 16 * 1024 * 1024,
+        cryptoApi: api,
+        chunkSize: 50 * 1024 * 1024,
         concurrency: 10,
+        partConcurrency: 4,
     });
 
-    const {isOver} = useGlobalDrop({accessToken, uploadManager});
+    const {isOver} = useGlobalDrop({ api, uploadManager });
 
     const TransferTrayConnector = useMemo(() => function TransferTrayConnectorInner({ uploadManager }){
         const download = useDownload()
@@ -83,18 +85,21 @@ export default function App() {
     }, []);
 
     const AppShell = useMemo(() => function AppShellInner({
-                          uploadManager, accessToken,
+                          uploadManager,
                           api, items, loading, error, currentFolder, nextPageToken,
-                          loadMore, openFolder, upTo, breadcrumb, setSearch, refresh, sort, setSortBy
+                          loadMore, openFolder, upTo, breadcrumb, refresh, sort, setSortBy
                       }){
         const { enqueue, enqueueMany } = useDownload()
+        const busy = useBusy()
 
         const [selectedIds, setSelectedIds] = useState(new Set())
         const [menu, setMenu] = useState(null) // {x,y,item?,group?}
         const [dialog, setDialog] = useState({ open:false, mode:null }) // move/copy
         const listRef = useRef(null)
         const sentinelRef = useRef(null)
-        const [query, setQuery] = useState('')
+        const fileUploadRef = useRef(null)
+        const folderUploadRef = useRef(null)
+        const [createMenu, setCreateMenu] = useState(null)
 
         useEffect(()=>{
             const sentinel = sentinelRef.current
@@ -105,8 +110,6 @@ export default function App() {
             io.observe(sentinel)
             return ()=> io.disconnect()
         }, [loadMore, loading, nextPageToken])
-
-        useEffect(()=>{ const t = setTimeout(()=> setSearch(query), 300); return ()=> clearTimeout(t) }, [query, setSearch])
 
         const toggleSelect = (checked, it)=>{ setSelectedIds(prev => { const n = new Set(prev); if(checked) n.add(it.id); else n.delete(it.id); return n }) }
         const clearSelection = ()=> setSelectedIds(new Set())
@@ -137,9 +140,9 @@ export default function App() {
 
         const onDouble = (it)=>{ if(it.mimeType==='application/vnd.google-apps.folder') openFolder(it); else enqueue(it) }
 
-        const openMenuAt = (pt, item)=>{ setMenu({ x: pt.x, y: pt.y, item }) }
-        const openRowMenu = (e, item)=>{ const pos={ x:e.clientX+window.scrollX, y:e.clientY+window.scrollY }; setMenu({ x:pos.x, y:pos.y, item, fromContext:true }) }
-        const onListContext = (e)=>{ if(selectedIds.size>0){ e.preventDefault(); setMenu({ x:e.clientX+window.scrollX, y:e.clientY+window.scrollY, item:null, group:true }) } }
+        const openMenuAt = (pt, item)=>{ setCreateMenu(null); setMenu({ x: pt.x, y: pt.y, item }) }
+        const openRowMenu = (e, item)=>{ const pos={ x:e.clientX+window.scrollX, y:e.clientY+window.scrollY }; setCreateMenu(null); setMenu({ x:pos.x, y:pos.y, item, fromContext:true }) }
+        const onListContext = (e)=>{ if(selectedIds.size>0){ e.preventDefault(); setCreateMenu(null); setMenu({ x:e.clientX+window.scrollX, y:e.clientY+window.scrollY, item:null, group:true }) } }
 
         const doRename = async (item)=>{
             const v = prompt('Rename item', item.name);
@@ -167,26 +170,69 @@ export default function App() {
 
         const confirmMoveCopy = async (destId)=>{
             const ids = dialog.targetIds
-            if(dialog.mode==='move'){
-                for(const id of ids){
-                    const it = items.find(x=> x.id===id)
-                    const old = it?.parents?.[0]
-                    await api.moveFile(id, destId, old)
-                }
-            } else if(dialog.mode==='copy'){
-                for(const id of ids){
-                    const it = items.find(x=> x.id===id)
-                    if(!it) continue
-                    if(it.mimeType === 'application/vnd.google-apps.folder'){
-                        await copyFolderRecursive(it.id, it.name, destId)
-                    } else {
-                        await api.copyFile(it.id, it.name, destId)
+            const stopBusy = busy.start?.(dialog.mode === 'move' ? 'move' : 'copy') ?? (()=>{})
+            try{
+                if(dialog.mode==='move'){
+                    for(const id of ids){
+                        const it = items.find(x=> x.id===id)
+                        const old = it?.parents?.[0]
+                        await api.moveFile(id, destId, old)
+                    }
+                } else if(dialog.mode==='copy'){
+                    for(const id of ids){
+                        const it = items.find(x=> x.id===id)
+                        if(!it) continue
+                        if(it.mimeType === 'application/vnd.google-apps.folder'){
+                            await copyFolderRecursive(it.id, it.name, destId)
+                        } else {
+                            await api.copyFile(it.id, it.name, destId)
+                        }
                     }
                 }
+            } finally {
+                stopBusy()
             }
             clearSelection()
             await refresh()
             setDialog({ open:false, mode:null })
+        }
+
+        const toggleCreateMenu = (event)=>{
+            event.preventDefault()
+            event.stopPropagation()
+            if(createMenu){
+                setCreateMenu(null)
+                return
+            }
+            const rect = event.currentTarget.getBoundingClientRect()
+            setMenu(null)
+            setCreateMenu({
+                x: rect.left + window.scrollX,
+                y: rect.bottom + 6 + window.scrollY,
+            })
+        }
+
+        const handleCreateFolder = async ()=>{
+            const name = prompt('Folder name')
+            const trimmed = name?.trim()
+            if(!trimmed) return
+            const stopBusy = busy.start?.('create-folder') ?? (()=>{})
+            try{
+                await api.createFolder(trimmed, currentFolder)
+                await refresh()
+            }catch(err){
+                alert(err?.message || 'Failed to create folder')
+            } finally {
+                stopBusy()
+            }
+        }
+
+        const handleUploadFile = ()=>{
+            fileUploadRef.current?.open()
+        }
+
+        const handleUploadFolder = ()=>{
+            folderUploadRef.current?.open()
         }
 
         const buildMenu = ()=>{
@@ -214,17 +260,32 @@ export default function App() {
 
             base.push({ id:'delete', label:'Delete', danger:true, onClick: async ()=>{
                     const ids = menu?.group? [...selectedIds] : [menu?.item?.id]
-                    for(const id of ids){ try{ await api.deleteFile(id) }catch{} }
-                    clearSelection(); await refresh()
+                    const stopBusy = busy.start?.('delete') ?? (()=>{})
+                    try{
+                        for(const id of ids){
+                            try{
+                                await api.deleteFile(id)
+                            }catch(err){
+                                console.error(err)
+                            }
+                        }
+                        clearSelection();
+                        await refresh()
+                    } finally {
+                        stopBusy()
+                    }
                 }})
             return base
         }
 
         return (
             <div className="app">
-                <Toolbar query={query} onQueryChange={setQuery} onRefresh={refresh}>
-                    <FileUploader uploadManager={uploadManager} />
-                    <FolderUploader accessToken={accessToken} uploadManager={uploadManager} />
+                <Toolbar onRefresh={refresh}>
+                    <button className="btn primary" type="button" onClick={toggleCreateMenu}>
+                        Create
+                    </button>
+                    <FileUploader ref={fileUploadRef} uploadManager={uploadManager} showButton={false} />
+                    <FolderUploader ref={folderUploadRef} api={api} uploadManager={uploadManager} showButton={false} />
                 </Toolbar>
 
                 <div className="breadcrumb">
@@ -236,7 +297,7 @@ export default function App() {
                     ))}
                 </div>
 
-                <div ref={listRef} className="list" onContextMenu={onListContext} onClick={()=> setMenu(null)}>
+                <div ref={listRef} className="list" onContextMenu={onListContext} onClick={()=> { setMenu(null); setCreateMenu(null); }}>
                     <div className="row th">
                         <div>
                             <input
@@ -279,6 +340,19 @@ export default function App() {
                     {error && <div className="empty" style={{ color:'var(--danger)' }}>{error}</div>}
                 </div>
 
+                {createMenu && (
+                    <ContextMenu
+                        x={createMenu.x}
+                        y={createMenu.y}
+                        onClose={()=> setCreateMenu(null)}
+                        items={[
+                            { id: 'create-folder', label: 'Create folder', onClick: handleCreateFolder },
+                            { id: 'upload-file', label: 'Upload file', onClick: handleUploadFile },
+                            { id: 'upload-folder', label: 'Upload folder', onClick: handleUploadFolder },
+                        ]}
+                    />
+                )}
+
                 {menu && <ContextMenu x={menu.x} y={menu.y} onClose={()=> setMenu(null)} items={buildMenu()} />}
 
                 <MoveCopyDialog
@@ -293,18 +367,22 @@ export default function App() {
     }, []);
 
     return (
-        <div style={{padding: 20, fontFamily: "roboto-mono, sans-serif"}}>
-            <h2>Google Drive React Demo</h2>
-            <button onClick={tryLogin}>Login with Google</button>
-            <DropHintOverlay visible={isOver}/>
+        <BusyProvider>
+            <div style={{padding: 20, fontFamily: "roboto-mono, sans-serif"}}>
+                <h2>Google Drive React Demo</h2>
+                <button onClick={tryLogin}>Login with Google</button>
+                <DropHintOverlay visible={isOver}/>
 
-            <DownloadProvider api={api}>
-                <TransferTrayConnector uploadManager={uploadManager} />
-                <AppShell uploadManager={uploadManager} accessToken={accessToken} {...drive} />
-            </DownloadProvider>
+                <DownloadProvider api={api}>
+                    <TransferTrayConnector uploadManager={uploadManager} />
+                    <AppShell uploadManager={uploadManager} {...drive} />
+                </DownloadProvider>
 
-        </div>
+            </div>
+        </BusyProvider>
     );
 }
+
+
 
 

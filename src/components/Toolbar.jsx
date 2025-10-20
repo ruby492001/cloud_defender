@@ -1,16 +1,9 @@
 import React from 'react';
 
-export default function Toolbar({ query, onQueryChange, onRefresh, children }) {
+export default function Toolbar({ onRefresh, children }) {
     return (
         <div className="toolbar">
-            <input
-                className="search"
-                placeholder="Search in Drive"
-                value={query}
-                onChange={e => onQueryChange(e.target.value)}
-            />
-
-            <div className="toolbar-actions">
+            <div className="toolbar-actions" style={{ flex: 1, justifyContent: "flex-start" }}>
                 {children}
                 <button className="btn icon" type="button" title="Refresh" onClick={onRefresh} aria-label="Refresh list">
                     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
