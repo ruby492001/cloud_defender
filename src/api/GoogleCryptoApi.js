@@ -1,7 +1,7 @@
-﻿import { initResumableUpload } from "./drive";
-
 const DEFAULT_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB
 const DEFAULT_HASH_BYTES = 64; // SHA-512 digest length placeholder
+
+export const EXCLUDED_FILE_NAMES = [];
 
 export default class GoogleCryptoApi {
     constructor(driveApi, options = {}) {
@@ -23,17 +23,24 @@ export default class GoogleCryptoApi {
 
     async loadCryptoConfig() {
         // TODO: download and parse encryption parameters/config from Drive.
-        return {};
+        return { 'key': ''};
+    }
+
+    isExcludedName(name = "") {
+        if (!name) return false;
+        return EXCLUDED_FILE_NAMES.includes(name);
     }
 
     encryptFileName(name) {
+        if (this.isExcludedName(name)) return name;
         // TODO: apply deterministic filename encryption here.
-        return name + 'test';
+        return name;
     }
 
     decryptFileName(name) {
+        if (this.isExcludedName(name)) return name;
         // TODO: decode encrypted filename back to its original value.
-        return name.replace('test', '');
+        return name;
     }
 
     createEncryptionContext(file) {
@@ -50,18 +57,22 @@ export default class GoogleCryptoApi {
     }
 
     createUploadSession(file) {
+        const skipCrypto = file?.name ? this.isExcludedName(file.name) : false;
         return {
             hash: this.createUploadHashContext(),
             encryption: this.createEncryptionContext(file),
             metadata: {},
+            skipCrypto,
         };
     }
 
     createDownloadSession(meta) {
+        const skipCrypto = meta?.name ? this.isExcludedName(meta.name) : false;
         return {
             hash: this.createDownloadHashContext(),
             decryption: this.createDecryptionContext(meta),
             metadata: {},
+            skipCrypto,
         };
     }
 
@@ -71,6 +82,7 @@ export default class GoogleCryptoApi {
     }
 
     updateUploadHash(ctx, chunk /* Uint8Array */, offset, session) {
+        if (session?.skipCrypto) return;
         // TODO: feed chunk into streaming hash here. session contains per-file state.
         ctx.totalBytes += chunk.byteLength;
         void offset;
@@ -87,6 +99,7 @@ export default class GoogleCryptoApi {
     }
 
     async encryptBlock(chunk /* Uint8Array */, { offset, session }) {
+        if (session?.skipCrypto) return chunk;
         // TODO: replace with real block encryption (chunk -> encryptedChunk) using session.encryption.
         void offset;
         void session;
@@ -94,6 +107,7 @@ export default class GoogleCryptoApi {
     }
 
     async encryptDigest(digest /* Uint8Array */, { file, session }) {
+        if (session?.skipCrypto) return digest;
         // TODO: optionally encrypt digest bytes before appending to payload.
         void file;
         void session;
@@ -113,6 +127,7 @@ export default class GoogleCryptoApi {
     }
 
     updateDownloadHash(ctx, chunk /* Uint8Array */, offset, session) {
+        if (session?.skipCrypto) return;
         // TODO: feed decrypted block into streaming hash verification.
         ctx.totalBytes += chunk.byteLength;
         void offset;
@@ -129,6 +144,7 @@ export default class GoogleCryptoApi {
     }
 
     async decryptBlock(chunk /* Uint8Array */, { offset, session }) {
+        if (session?.skipCrypto) return chunk;
         // TODO: replace with block-level decryption (session.decryption).
         void offset;
         void session;
@@ -136,6 +152,7 @@ export default class GoogleCryptoApi {
     }
 
     async decryptDigest(digest /* Uint8Array */, session) {
+        if (session?.skipCrypto) return digest;
         // TODO: decrypt digest bytes if they were encrypted during upload.
         void session;
         return digest;
@@ -144,14 +161,16 @@ export default class GoogleCryptoApi {
     async listFolder(folderId, pageToken, search) {
         await this.ensureConfigLoaded();
         const result = await this.drive.listFolder(folderId, pageToken, search);
-        const files = (result.files || []).map((it) => this.decorateIncomingItem(it));
+        const files = (result.files || [])
+            .map((it) => this.decorateIncomingItem(it))
+            .filter(Boolean);
         return { ...result, files };
     }
 
     async createFolder(name, parentId) {
         await this.ensureConfigLoaded();
-        const targetParent = parentId ?? "root";
-        const folder = await this.drive.createFolder(this.encryptFileName(name), targetParent);
+        const preparedName = this.encryptFileName(name);
+        const folder = await this.drive.createFolder(preparedName, parentId ?? "root");
         return this.decorateIncomingItem(folder);
     }
 
@@ -160,11 +179,12 @@ export default class GoogleCryptoApi {
         return this.drive.deleteFile(id);
     }
 
-    async renameFile(id, newName) {
+    async renameFile(id, newName, options = {}) {
         await this.ensureConfigLoaded();
-        const encryptedName = this.encryptFileName(newName);
-        const res = await this.drive.renameFile(id, encryptedName);
-        return this.decorateIncomingItem({ ...res, name: encryptedName });
+        const { encrypted = false } = options || {};
+        const finalName = encrypted ? newName : this.encryptFileName(newName);
+        const res = await this.drive.renameFile(id, finalName);
+        return this.decorateIncomingItem({ ...res, name: finalName });
     }
 
     async moveFile(id, newParentId, oldParentId) {
@@ -190,9 +210,13 @@ export default class GoogleCryptoApi {
                 // Place to cache per-file encryption metadata (keys IVs etc.)
                 metadata: {},
             };
+        const plainName = this.decryptFileName(item.name);
+        if (this.isExcludedName(plainName)) {
+            return null;
+        }
         return {
             ...item,
-            name: this.decryptFileName(item.name),
+            name: plainName,
             cryptoContext,
         };
     }
@@ -220,11 +244,11 @@ export default class GoogleCryptoApi {
 
     async prepareUpload({ file, parentId, mimeType, size, session }) {
         await this.ensureConfigLoaded();
-        const preparedName = this.encryptFileName(file.name);
         const uploadSession = session ?? this.createUploadSession(file);
-        const finalSize = (size ?? file.size) + this.hashByteLength;
-        const uploadUrl = await initResumableUpload({
-            accessToken: this.drive.token,
+        const shouldSkipCrypto = uploadSession.skipCrypto;
+        const preparedName = shouldSkipCrypto ? file.name : this.encryptFileName(file.name);
+        const finalSize = (size ?? file.size) + (shouldSkipCrypto ? 0 : this.hashByteLength);
+        const uploadUrl = await this.drive.initResumableUpload({
             name: preparedName,
             mimeType: mimeType || file.type || "application/octet-stream",
             size: finalSize,
@@ -246,8 +270,9 @@ export default class GoogleCryptoApi {
         const uploadSession = session ?? this.createUploadSession(file);
         uploadSession.hash = uploadSession.hash ?? this.createUploadHashContext();
         const hashCtx = uploadSession.hash;
+        const includeDigest = !uploadSession.skipCrypto;
 
-        const totalBytes = file.size + this.hashByteLength;
+        const totalBytes = file.size + (includeDigest ? this.hashByteLength : 0);
         const bufferQueue = [];
         let bufferedBytes = 0;
         let nextPlannedStart = 0;
@@ -413,11 +438,16 @@ export default class GoogleCryptoApi {
             await flush(false);
         }
 
-        const digest = await this.finalizeUploadHash(hashCtx, uploadSession);
-        uploadSession.digest = digest;
-        const encryptedDigest = await this.encryptDigest(digest, { file, session: uploadSession });
-        bufferQueue.push(encryptedDigest);
-        bufferedBytes += encryptedDigest.byteLength;
+        let digest = null;
+        if (includeDigest) {
+            digest = await this.finalizeUploadHash(hashCtx, uploadSession);
+            uploadSession.digest = digest;
+            const encryptedDigest = await this.encryptDigest(digest, { file, session: uploadSession });
+            bufferQueue.push(encryptedDigest);
+            bufferedBytes += encryptedDigest.byteLength;
+        } else {
+            uploadSession.digest = null;
+        }
         await flush(true, true);
 
         if (errored) throw errored;
@@ -433,7 +463,9 @@ export default class GoogleCryptoApi {
             }
         }
 
-        await this.appendCustomMetadataTail(lastResponse?.id, digest, uploadSession);
+        if (includeDigest) {
+            await this.appendCustomMetadataTail(lastResponse?.id, digest, uploadSession);
+        }
         return { response: lastResponse, session: uploadSession };
     }
 
@@ -459,10 +491,14 @@ export default class GoogleCryptoApi {
         };
         const session = providedSession ?? this.createDownloadSession(metaForSession);
         session.hash = session.hash ?? this.createDownloadHashContext();
+        if (restOptions.name && this.isExcludedName(restOptions.name)) {
+            session.skipCrypto = true;
+        }
         const hashCtx = session.hash;
+        const digestSize = session.skipCrypto ? 0 : this.hashByteLength;
 
         const cache = this.createDownloadCacheWriter();
-        const digestBuffer = new Uint8Array(this.hashByteLength);
+        const digestBuffer = digestSize ? new Uint8Array(digestSize) : null;
         let digestOffset = 0;
         let totalBytes = 0;
 
@@ -471,17 +507,17 @@ export default class GoogleCryptoApi {
             onChunk: async (encryptedChunk, meta) => {
                 const { offset, total } = meta;
                 totalBytes = total;
-                const contentSize = Math.max(0, total - this.hashByteLength);
+                const contentSize = Math.max(0, total - digestSize);
                 let absoluteOffset = offset;
                 let cursor = 0;
 
                 while (cursor < encryptedChunk.byteLength) {
-                    if (absoluteOffset >= contentSize) {
+                    if (!session.skipCrypto && absoluteOffset >= contentSize) {
                         const digestSlice = encryptedChunk.subarray(cursor);
-                        const remainingDigest = Math.max(0, this.hashByteLength - digestOffset);
+                        const remainingDigest = Math.max(0, digestSize - digestOffset);
                         const copySlice =
                             remainingDigest < digestSlice.length ? digestSlice.subarray(0, remainingDigest) : digestSlice;
-                        if (copySlice.length > 0) {
+                        if (copySlice.length > 0 && digestBuffer) {
                             digestBuffer.set(copySlice, digestOffset);
                             digestOffset += copySlice.length;
                         }
@@ -500,12 +536,17 @@ export default class GoogleCryptoApi {
             },
         });
 
-        const decryptedDigest = await this.decryptDigest(digestBuffer, session);
-        const calculatedDigest = await this.finalizeDownloadHash(hashCtx, session);
-        session.digest = calculatedDigest;
+        let calculatedDigest = null;
+        if (!session.skipCrypto && digestBuffer) {
+            const decryptedDigest = await this.decryptDigest(digestBuffer, session);
+            calculatedDigest = await this.finalizeDownloadHash(hashCtx, session);
+            session.digest = calculatedDigest;
 
-        if (!this.compareDigests(decryptedDigest, calculatedDigest)) {
-            throw new Error("Checksum mismatch while downloading file");
+            if (!this.compareDigests(decryptedDigest, calculatedDigest)) {
+                throw new Error("Checksum mismatch while downloading file");
+            }
+        } else {
+            session.digest = null;
         }
 
         const blob = await cache.finalize(restOptions.type || "application/octet-stream");

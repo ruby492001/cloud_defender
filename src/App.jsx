@@ -146,7 +146,12 @@ export default function App() {
 
         const doRename = async (item)=>{
             const v = prompt('Rename item', item.name);
-            if(v && v.trim()){ await api.renameFile(item.id, v.trim()); await refresh() }
+            if(v && v.trim()){
+                const trimmed = v.trim()
+                const shouldEncrypt = !(api.isExcludedName?.(trimmed))
+                await api.renameFile(item.id, trimmed, { encrypted: !shouldEncrypt })
+                await refresh()
+            }
         }
         const copyFolderRecursive = async (sourceFolderId, sourceName, destParentId) => {
             const created = await api.createFolder(sourceName, destParentId)
