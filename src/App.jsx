@@ -13,6 +13,8 @@ import DropHintOverlay from "./components/DropHintOverlay.jsx";
 import {useDrive} from "./hooks/useDrive.js";
 import {DownloadProvider, useDownload} from "./state/DownloadManager.jsx";
 import { BusyProvider, useBusy } from "./components/BusyOverlay.jsx";
+import {CryptoSuite} from "./crypto/CryptoSuite.js";
+import createCfbModule from './crypto/wasm/cfb_wasm.js';
 
 const scopes = ["openid",
                         "email",
@@ -37,6 +39,9 @@ const accessToken = "ya29.a0AQQ_BDRv2cj90wbpMOwVPpQadlMzjmzFpY1aHR5JqcN-anUygXr3
 export default function App() {
     const drive = useDrive(accessToken)
     const {api} = drive
+    const [cryptoReady, setCryptoReady] = useState(false);
+    const initStarted = useRef(false);
+
 
     const login = useGoogleLogin({
         onSuccess: codeResponse => onSuccessLogin(codeResponse),
@@ -48,9 +53,26 @@ export default function App() {
         login();
     }
 
+    useEffect(() => {
+        if (initStarted.current) return;           // защита от двойного вызова (StrictMode/HMR)
+        initStarted.current = true;
+
+        CryptoSuite.registerSuite(
+            'cfb',
+            createCfbModule,
+            (p) => p.endsWith('.wasm')
+                ? new URL('./crypto/wasm/cfb_wasm.wasm', import.meta.url).href
+                : p
+        );
+        (async () => {
+            await CryptoSuite.ready('cfb');
+            setCryptoReady(true);
+        })();
+    }, []);
+
     const uploadManager = useUploadManager({
         cryptoApi: api,
-        chunkSize: 50 * 1024 * 1024,
+        chunkSize: 5 * 1024 * 1024,
         concurrency: 10,
         partConcurrency: 4,
     });

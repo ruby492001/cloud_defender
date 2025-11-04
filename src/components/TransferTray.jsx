@@ -634,7 +634,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                     </div>
 
                     {downloadTasks.map((task) => {
-                        const { id, name, progress = 0, status, kind, error, etaSeconds } = task;
+                        const { id, name, progress = 0, status, kind, error, etaSeconds, integrityCorrupted } = task;
                         const rawName = name || "Untitled";
                         const displayName = truncateName(rawName);
                         const subtitle = kind === "folder" ? "Folder (zip)" : "File";
@@ -642,6 +642,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                         const canRemove = ["error", "canceled", "done"].includes(status);
                         const safeProgress = Math.min(100, Math.max(0, progress || 0));
                         const etaLabel = formatEta(etaSeconds);
+                        const errorMessage = integrityCorrupted ? "Data integrity corrupted" : error;
                         return (
                             <div key={id} style={styles.taskCard}>
                                 <div style={styles.row}>
@@ -659,7 +660,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                 </div>
                                 <div style={styles.meta}>
                                     <span>{subtitle}</span>
-                                    {error && <span style={styles.error}>{error}</span>}
+                                    {errorMessage && <span style={styles.error}>{errorMessage}</span>}
                                 </div>
                                 <div style={styles.progress}>
                                     <div
