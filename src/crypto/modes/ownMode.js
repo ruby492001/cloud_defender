@@ -1,12 +1,57 @@
 import { Hasher } from "../hasher.js";
-import {ALG, CryptoSuite} from "../CryptoSuite.js";
+import { ALG, CryptoSuite } from "../CryptoSuite.js";
 
-// хардкодный ключ
-let KEY = new Uint8Array([142, 57, 203, 19, 88, 241, 76, 12,
-    199, 34, 158, 5, 243, 61, 129, 90,
-    44, 177, 230, 211, 6, 254, 119, 38,
-    97, 165, 14, 208, 73, 190, 52, 241]);
+const DEFAULT_ALGORITHM = ALG.ARIA_128_CFB128;
+const ALG_VALUES = new Set(Object.values(ALG));
+const KEY_LENGTH_BY_ALG = {
+    [ALG.AES_128_CFB128]: 16,
+    [ALG.AES_256_CFB128]: 32,
+    [ALG.CAMELLIA_128_CFB128]: 16,
+    [ALG.CAMELLIA_256_CFB128]: 32,
+    [ALG.ARIA_128_CFB128]: 16,
+    [ALG.ARIA_256_CFB128]: 32,
+};
 
+function normalizeAlgorithm(value) {
+    if (typeof value === "number" && ALG_VALUES.has(value)) {
+        return value;
+    }
+    if (typeof value === "string" && value) {
+        const trimmed = value.trim().toUpperCase();
+        if (ALG.hasOwnProperty(trimmed)) {
+            return ALG[trimmed];
+        }
+        const withoutPrefix = trimmed.startsWith("ALG.") ? trimmed.slice(4) : trimmed;
+        if (ALG.hasOwnProperty(withoutPrefix)) {
+            return ALG[withoutPrefix];
+        }
+    }
+    return DEFAULT_ALGORITHM;
+}
+
+function normalizeKey(keyBytes, algorithm) {
+    if (!(keyBytes instanceof Uint8Array)) {
+        throw new TypeError("Own mode requires keyBytes to be a Uint8Array");
+    }
+    if (keyBytes.length === 0) {
+        throw new Error("Own mode requires a non-empty encryption key");
+    }
+    const requiredLength = KEY_LENGTH_BY_ALG[algorithm] ?? null;
+    if (!requiredLength) {
+        return keyBytes.slice();
+    }
+    if (keyBytes.length === requiredLength) {
+        return keyBytes.slice();
+    }
+    if (keyBytes.length > requiredLength) {
+        return keyBytes.slice(0, requiredLength);
+    }
+    const normalized = new Uint8Array(requiredLength);
+    for (let i = 0; i < requiredLength; i += 1) {
+        normalized[i] = keyBytes[i % keyBytes.length];
+    }
+    return normalized;
+}
 
 function generateIv(ivLength) {
     const iv = new Uint8Array(ivLength);
@@ -17,17 +62,19 @@ function generateIv(ivLength) {
             iv[i] = Math.floor(Math.random() * 256);
         }
     }
-
     return iv;
 }
 
-export function createEncryptionContext({ keyBytes, ivByteLength }) {
-    let iv = generateIv(ivByteLength);
+export function createEncryptionContext({ keyBytes, ivByteLength, encryptionAlgorithm }) {
+    const algorithm = normalizeAlgorithm(encryptionAlgorithm);
+    const key = normalizeKey(keyBytes, algorithm);
+    const iv = generateIv(ivByteLength);
     return {
-        key: keyBytes,
-        iv: iv,
+        key,
+        algorithm,
+        iv,
         ivWritten: false,
-        encryptContext: CryptoSuite.cfb().createContext(ALG.AES_256_CFB128, KEY, iv, true),
+        encryptContext: CryptoSuite.cfb().createContext(algorithm, key, iv, true),
     };
 }
 
@@ -39,10 +86,12 @@ export function ensureEncryptionIv(context, ivByteLength) {
     return context.iv;
 }
 
-export function createDecryptionContext({ keyBytes, ivByteLength }) {
-    console.log(ivByteLength);
+export function createDecryptionContext({ keyBytes, ivByteLength, encryptionAlgorithm }) {
+    const algorithm = normalizeAlgorithm(encryptionAlgorithm);
+    const key = normalizeKey(keyBytes, algorithm);
     return {
-        key: keyBytes,
+        key,
+        algorithm,
         iv: new Uint8Array(ivByteLength),
         ivBytesRead: 0,
         decryptContext: null,
@@ -53,17 +102,44 @@ export function encryptBlock(chunk, { context }) {
     return context.encryptContext.update(chunk);
 }
 
-export function decryptBlock(chunk, { context, offset = 0 }) {
+export function decryptBlock(chunk, { context }) {
     if (!context.iv || context.iv.byteLength === 0) {
         throw new Error("Own mode requires IV before decrypting content");
     }
-
-    if(!context.decryptContext)
-    {
-        context.decryptContext = CryptoSuite.cfb().createContext(ALG.AES_256_CFB128, KEY, context.iv, false);
+    if (!context.decryptContext) {
+        context.decryptContext = CryptoSuite.cfb().createContext(context.algorithm, context.key, context.iv, false);
     }
-
     return context.decryptContext.update(chunk);
+}
+
+export function finalizeEncryption(context) {
+    if (!context?.encryptContext) {
+        return new Uint8Array(0);
+    }
+    const finalChunk =
+        typeof context.encryptContext.finalize === "function"
+            ? context.encryptContext.finalize()
+            : new Uint8Array(0);
+    if (typeof context.encryptContext.free === "function") {
+        context.encryptContext.free();
+    }
+    context.encryptContext = null;
+    return finalChunk;
+}
+
+export function finalizeDecryption(context) {
+    if (!context?.decryptContext) {
+        return new Uint8Array(0);
+    }
+    const finalChunk =
+        typeof context.decryptContext.finalize === "function"
+            ? context.decryptContext.finalize()
+            : new Uint8Array(0);
+    if (typeof context.decryptContext.free === "function") {
+        context.decryptContext.free();
+    }
+    context.decryptContext = null;
+    return finalChunk;
 }
 
 export function createHashContext(options = {}) {
@@ -73,7 +149,7 @@ export function createHashContext(options = {}) {
     return { totalBytes: 0, hashCtx: hasher, algorithm };
 }
 
-export function updateHash(ctx, chunk /* Uint8Array */) {
+export function updateHash(ctx, chunk) {
     if (!ctx) return;
     ctx.hashCtx.update(chunk);
     ctx.totalBytes += chunk.byteLength;
@@ -92,4 +168,24 @@ export function decryptDigest(bytes) {
 
 export function encryptDigest(bytes) {
     return bytes;
+}
+
+export function calculateEncryptedSize({ originalSize, ivByteLength }) {
+    const size = Number.isFinite(originalSize) ? Number(originalSize) : 0;
+    const ivSize = Number.isFinite(ivByteLength) ? Number(ivByteLength) : 0;
+    return size + ivSize;
+}
+
+export function encryptFileName(name, { keyBytes, encryptionAlgorithm, mode } = {}) {
+    void keyBytes;
+    void encryptionAlgorithm;
+    void mode;
+    return name;
+}
+
+export function decryptFileName(name, { keyBytes, encryptionAlgorithm, mode } = {}) {
+    void keyBytes;
+    void encryptionAlgorithm;
+    void mode;
+    return name;
 }

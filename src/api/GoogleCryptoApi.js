@@ -1,13 +1,35 @@
-import * as ownMode from "../crypto/modes/ownMode.js";
-import * as rcloneMode from "../crypto/modes/rcloneMode.js";
-import * as commonModes from "../crypto/modes/commonModes.js";
+import {
+    normalizeMode as normalizeCryptoModeValue,
+    createEncryptionContext as createModeEncryptionContext,
+    createDecryptionContext as createModeDecryptionContext,
+    ensureEncryptionIv as ensureModeEncryptionIv,
+    encryptBlock as encryptModeBlock,
+    decryptBlock as decryptModeBlock,
+    finalizeEncryption as finalizeModeEncryption,
+    finalizeDecryption as finalizeModeDecryption,
+    createHashContext as createModeHashContext,
+    updateHash as updateModeHash,
+    finalizeHash as finalizeModeHash,
+    encryptDigest as encryptModeDigest,
+    decryptDigest as decryptModeDigest,
+    calculateEncryptedSize as calculateModeEncryptedSize,
+    encryptFileName as encryptModeFileName,
+    decryptFileName as decryptModeFileName,
+} from "../crypto/modes/modeDriver.js";
+
 const DEFAULT_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB
 const DEFAULT_HASH_BYTES = 64; // SHA-512 digest length placeholder
 const IV_BYTE_LENGTH = 16;
+const DEFAULT_ENCRYPTION_ALGORITHM = "AES_256_CFB128";
 const CRYPTO_MODE_RCLONE = "rclone";
 const CRYPTO_MODE_OWN = "own";
 const INTEGRITY_ERROR_CODE = "INTEGRITY_ERROR";
 const INTEGRITY_ERROR_MESSAGE = "Data integrity corrupted";
+
+// хардкодный ключ
+const KEY = "8e39cb1358f14c0cc7229e05f33d815a2cb1e6d306fe772661a50ed049be34f1";
+
+
 export const EXCLUDED_FILE_NAMES = [];
 export default class GoogleCryptoApi {
     constructor(driveApi, options = {}) {
@@ -25,14 +47,18 @@ export default class GoogleCryptoApi {
             this._configPromise = this.loadCryptoConfig()
                 .then((config) => {
                     const normalized = config || {};
-                    this.currentConfig = normalized;
-                    this.cryptoMode = this.normalizeCryptoMode(normalized.mode || normalized.algorithm);
+                    const nextConfig = { ...normalized };
+                    if (!nextConfig.encryptionAlgorithm) {
+                        nextConfig.encryptionAlgorithm = DEFAULT_ENCRYPTION_ALGORITHM;
+                    }
+                    this.currentConfig = nextConfig;
+                    this.cryptoMode = this.normalizeCryptoMode(nextConfig.mode || nextConfig.algorithm);
                     this._cachedKeyBytes = null;
-                    return normalized;
+                    return nextConfig;
                 })
                 .catch((err) => {
                     console.warn("GoogleCryptoApi: failed to load crypto config", err);
-                    this.currentConfig = {};
+                    this.currentConfig = { encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM };
                     this.cryptoMode = CRYPTO_MODE_OWN;
                     this._cachedKeyBytes = null;
                     return {};
@@ -42,12 +68,16 @@ export default class GoogleCryptoApi {
     }
     async loadCryptoConfig() {
         // TODO: download and parse encryption parameters/config from Drive.
-        return { key: "", mode: CRYPTO_MODE_OWN, hashAlgorithm: "SHA-512" };
+        return {
+            key: KEY,
+            mode: CRYPTO_MODE_OWN,
+            hashAlgorithm: "SHA-512",
+            encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+        };
     }
     normalizeCryptoMode(mode) {
-        if (typeof mode !== "string") return CRYPTO_MODE_OWN;
-        const value = mode.trim().toLowerCase();
-        return value === CRYPTO_MODE_RCLONE ? CRYPTO_MODE_RCLONE : CRYPTO_MODE_OWN;
+        const normalized = normalizeCryptoModeValue(mode);
+        return normalized === CRYPTO_MODE_RCLONE ? CRYPTO_MODE_RCLONE : CRYPTO_MODE_OWN;
     }
     getCryptoMode() {
         return this.cryptoMode || CRYPTO_MODE_OWN;
@@ -55,8 +85,29 @@ export default class GoogleCryptoApi {
     isRcloneMode() {
         return this.getCryptoMode() === CRYPTO_MODE_RCLONE;
     }
+    getEncryptionAlgorithm(mode = this.getCryptoMode()) {
+        if (mode === CRYPTO_MODE_RCLONE) {
+            return null;
+        }
+        const configured = this.currentConfig?.encryptionAlgorithm;
+        if (configured && typeof configured === "string") {
+            const trimmed = configured.trim();
+            if (trimmed) return trimmed;
+        }
+        return DEFAULT_ENCRYPTION_ALGORITHM;
+    }
     shouldUseStreamingCrypto(session) {
         return !!session && !session.skipCrypto;
+    }
+    calculateUploadSize({ size, mode, skipCrypto } = {}) {
+        const originalSize = Number.isFinite(size) ? Number(size) : 0;
+        const normalizedMode = this.normalizeCryptoMode(mode ?? this.getCryptoMode());
+        return calculateModeEncryptedSize({
+            mode: normalizedMode,
+            skipCrypto: !!skipCrypto,
+            originalSize,
+            ivByteLength: this.ivByteLength,
+        });
     }
     getHashAlgorithm() {
         const alg = this.currentConfig?.hashAlgorithm;
@@ -66,32 +117,41 @@ export default class GoogleCryptoApi {
     }
     getKeyBytes() {
         if (this._cachedKeyBytes) return this._cachedKeyBytes;
-        const keySource = this.currentConfig?.key ?? "";
+        const keyCandidate = this.currentConfig?.key;
+        const keySource = typeof keyCandidate === "string" ? keyCandidate.trim() : "";
         if (!keySource) {
-            this._cachedKeyBytes = new Uint8Array(32);
-            return this._cachedKeyBytes;
+            throw new Error("GoogleCryptoApi: encryption key is missing in the crypto config");
         }
         try {
-            const trimmed = keySource.trim();
             // Support base64-encoded keys; fallback to UTF-8 bytes.
             let raw;
-            if (/^[A-Za-z0-9+/=]+$/.test(trimmed) && trimmed.length % 4 === 0) {
+            const hexCandidate = keySource.startsWith("0x") || keySource.startsWith("0X")
+                ? keySource.slice(2)
+                : keySource;
+            if (/^[0-9a-fA-F]+$/.test(hexCandidate) && hexCandidate.length % 2 === 0) {
+                const byteLength = hexCandidate.length / 2;
+                raw = new Uint8Array(byteLength);
+                for (let i = 0; i < byteLength; i += 1) {
+                    const byte = hexCandidate.slice(i * 2, i * 2 + 2);
+                    raw[i] = parseInt(byte, 16);
+                }
+            } else if (/^[A-Za-z0-9+/=]+$/.test(keySource) && keySource.length % 4 === 0) {
                 if (typeof atob === "function") {
-                    raw = Uint8Array.from(atob(trimmed), (c) => c.charCodeAt(0));
+                    raw = Uint8Array.from(atob(keySource), (c) => c.charCodeAt(0));
                 } else if (typeof Buffer !== "undefined") {
-                    raw = Uint8Array.from(Buffer.from(trimmed, "base64"));
+                    raw = Uint8Array.from(Buffer.from(keySource, "base64"));
                 } else {
                     throw new Error("No base64 decoder available");
                 }
             } else {
-                raw = new TextEncoder().encode(trimmed);
+                raw = new TextEncoder().encode(keySource);
             }
             this._cachedKeyBytes = raw;
             return raw;
         } catch (err) {
-            console.warn("GoogleCryptoApi: failed to decode key, falling back to zero key", err);
-            this._cachedKeyBytes = new Uint8Array(32);
-            return this._cachedKeyBytes;
+            const error = new Error(`GoogleCryptoApi: failed to decode encryption key: ${err?.message ?? err}`);
+            error.cause = err;
+            throw error;
         }
     }
     createIntegrityError(details = {}) {
@@ -105,48 +165,72 @@ export default class GoogleCryptoApi {
         return EXCLUDED_FILE_NAMES.includes(name);
     }
     encryptFileName(name) {
-        return commonModes.encryptFileName(name, {
+        if (!name) return name;
+        if (this.isExcludedName(name)) {
+            return name;
+        }
+        const normalizedMode = this.normalizeCryptoMode(this.getCryptoMode());
+        const keyBytes = this.getKeyBytes();
+        return encryptModeFileName({
+            mode: normalizedMode,
+            name,
+            keyBytes,
+            encryptionAlgorithm: this.getEncryptionAlgorithm(normalizedMode),
             isExcludedName: (value) => this.isExcludedName(value),
         });
     }
     decryptFileName(name) {
-        return commonModes.decryptFileName(name, {
+        if (!name) return name;
+        if (this.isExcludedName(name)) {
+            return name;
+        }
+        const normalizedMode = this.normalizeCryptoMode(this.getCryptoMode());
+        const keyBytes = this.getKeyBytes();
+        return decryptModeFileName({
+            mode: normalizedMode,
+            name,
+            keyBytes,
+            encryptionAlgorithm: this.getEncryptionAlgorithm(normalizedMode),
             isExcludedName: (value) => this.isExcludedName(value),
         });
     }
     createEncryptionContext({ file, mode, skipCrypto }) {
         void file;
-        const keyBytes = this.getKeyBytes();
-        if (skipCrypto) {
-            return { mode, key: keyBytes, iv: null, ivWritten: true };
-        }
-        if (mode === CRYPTO_MODE_OWN) {
-            const context = ownMode.createEncryptionContext({ keyBytes, ivByteLength: this.ivByteLength });
-            return { mode, ...context };
-        }
-        const context = rcloneMode.createEncryptionContext({ keyBytes, ivByteLength: this.ivByteLength });
-        return { mode, ...context };
+        const normalizedMode = this.normalizeCryptoMode(mode);
+        const encryptionAlgorithm = this.getEncryptionAlgorithm(normalizedMode);
+        const keyBytes = skipCrypto ? null : this.getKeyBytes();
+        return createModeEncryptionContext({
+            mode: normalizedMode,
+            skipCrypto,
+            keyBytes,
+            ivByteLength: this.ivByteLength,
+            encryptionAlgorithm,
+        });
     }
     createDecryptionContext({ meta, mode, skipCrypto }) {
         void meta;
-        const keyBytes = this.getKeyBytes();
-        if (skipCrypto) {
-            return { mode, key: keyBytes, iv: null, ivBytesRead: 0 };
-        }
-        if (mode === CRYPTO_MODE_OWN) {
-            const context = ownMode.createDecryptionContext({ keyBytes, ivByteLength: this.ivByteLength });
-            return { mode, ...context };
-        }
-        const context = rcloneMode.createDecryptionContext({ keyBytes, ivByteLength: this.ivByteLength });
-        return { mode, ...context };
+        const normalizedMode = this.normalizeCryptoMode(mode);
+        const encryptionAlgorithm = this.getEncryptionAlgorithm(normalizedMode);
+        const keyBytes = skipCrypto ? null : this.getKeyBytes();
+        return createModeDecryptionContext({
+            mode: normalizedMode,
+            skipCrypto,
+            keyBytes,
+            ivByteLength: this.ivByteLength,
+            encryptionAlgorithm,
+        });
     }
     createUploadSession(file) {
         const skipCrypto = file?.name ? this.isExcludedName(file.name) : false;
-        const mode = this.getCryptoMode();
-        const hashAlgorithm = mode === CRYPTO_MODE_OWN ? this.getHashAlgorithm() : null;
+        const mode = this.normalizeCryptoMode(this.getCryptoMode());
+        const hashAlgorithm = !skipCrypto && mode === CRYPTO_MODE_OWN ? this.getHashAlgorithm() : null;
+        const hashContext = hashAlgorithm
+            ? createModeHashContext({ mode, algorithm: hashAlgorithm })
+            : null;
+        const encryption = this.createEncryptionContext({ file, mode, skipCrypto });
         return {
-            hash: hashAlgorithm ? ownMode.createHashContext({ algorithm: hashAlgorithm }) : null,
-            encryption: this.createEncryptionContext({ file, mode, skipCrypto }),
+            hash: hashContext,
+            encryption,
             metadata: {},
             skipCrypto,
             mode,
@@ -155,11 +239,15 @@ export default class GoogleCryptoApi {
     }
     createDownloadSession(meta) {
         const skipCrypto = meta?.name ? this.isExcludedName(meta.name) : false;
-        const mode = this.getCryptoMode();
-        const hashAlgorithm = mode === CRYPTO_MODE_OWN ? this.getHashAlgorithm() : null;
+        const mode = this.normalizeCryptoMode(this.getCryptoMode());
+        const hashAlgorithm = !skipCrypto && mode === CRYPTO_MODE_OWN ? this.getHashAlgorithm() : null;
+        const hashContext = hashAlgorithm
+            ? createModeHashContext({ mode, algorithm: hashAlgorithm })
+            : null;
+        const decryption = this.createDecryptionContext({ meta, mode, skipCrypto });
         return {
-            hash: hashAlgorithm ? ownMode.createHashContext({ algorithm: hashAlgorithm }) : null,
-            decryption: this.createDecryptionContext({ meta, mode, skipCrypto }),
+            hash: hashContext,
+            decryption,
             metadata: {},
             skipCrypto,
             mode,
@@ -253,16 +341,21 @@ export default class GoogleCryptoApi {
         if (uploadSession.mode === CRYPTO_MODE_OWN) {
             uploadSession.hashAlgorithm = uploadSession.hashAlgorithm || this.getHashAlgorithm();
             if (!uploadSession.hash && uploadSession.hashAlgorithm) {
-                uploadSession.hash = ownMode.createHashContext({ algorithm: uploadSession.hashAlgorithm });
+                uploadSession.hash = createModeHashContext({
+                    mode: uploadSession.mode,
+                    algorithm: uploadSession.hashAlgorithm,
+                });
             }
         }
         const shouldSkipCrypto = uploadSession.skipCrypto;
         const usesStreaming = this.shouldUseStreamingCrypto(uploadSession);
-        const requiresDigest = !shouldSkipCrypto && uploadSession.mode === CRYPTO_MODE_OWN;
-        let finalSize = size ?? file.size;
-        if (usesStreaming) {
-            finalSize += this.ivByteLength;
-        }
+        const requiresDigest = usesStreaming && uploadSession.mode === CRYPTO_MODE_OWN;
+        const sourceSize = size ?? file.size;
+        let finalSize = this.calculateUploadSize({
+            size: sourceSize,
+            mode: uploadSession.mode,
+            skipCrypto: shouldSkipCrypto,
+        });
         if (requiresDigest) {
             finalSize += this.hashByteLength;
         }
@@ -296,18 +389,25 @@ export default class GoogleCryptoApi {
             uploadSession.hashAlgorithm = hashAlgorithm;
         }
         const hashCtx = requiresDigest
-            ? uploadSession.hash ?? ownMode.createHashContext({ algorithm: hashAlgorithm })
+            ? uploadSession.hash ?? createModeHashContext({ mode: uploadSession.mode, algorithm: hashAlgorithm })
             : null;
         if (requiresDigest && !uploadSession.hash && hashCtx) {
             uploadSession.hash = hashCtx;
         }
-        const cryptoModule = uploadSession.mode === CRYPTO_MODE_OWN ? ownMode : rcloneMode;
         const ivForUpload = usesStreaming
-            ? cryptoModule.ensureEncryptionIv(uploadSession.encryption, this.ivByteLength)
+            ? ensureModeEncryptionIv({
+                mode: uploadSession.mode,
+                context: uploadSession.encryption,
+                ivByteLength: this.ivByteLength,
+            })
             : null;
+        const baseUploadSize = this.calculateUploadSize({
+            size: file.size,
+            mode: uploadSession.mode,
+            skipCrypto: uploadSession.skipCrypto,
+        });
         let ivQueued = !usesStreaming || !ivForUpload;
-        const totalBytes =
-            file.size + (usesStreaming ? this.ivByteLength : 0) + (requiresDigest ? this.hashByteLength : 0);
+        const totalBytes = baseUploadSize + (requiresDigest ? this.hashByteLength : 0);
         const bufferQueue = [];
         let bufferedBytes = 0;
         let nextPlannedStart = 0;
@@ -450,11 +550,17 @@ export default class GoogleCryptoApi {
             const slice = file.slice(offset, Math.min(offset + this.blockSize, file.size));
             const plainChunk = new Uint8Array(await slice.arrayBuffer());
             if (requiresDigest && hashCtx) {
-                ownMode.updateHash(hashCtx, plainChunk);
+                updateModeHash({
+                    mode: uploadSession.mode,
+                    hashContext: hashCtx,
+                    chunk: plainChunk,
+                });
             }
             const encryptedBlock = usesStreaming
-                ? cryptoModule.encryptBlock(plainChunk, {
+                ? encryptModeBlock({
+                    mode: uploadSession.mode,
                     context: uploadSession.encryption,
+                    chunk: plainChunk,
                     offset,
                     ivByteLength: this.ivByteLength,
                 })
@@ -479,13 +585,25 @@ export default class GoogleCryptoApi {
                 uploadSession.encryption.ivWritten = true;
             }
         }
+        const finalEncryptedChunk = finalizeModeEncryption({
+            mode: uploadSession.mode,
+            context: uploadSession.encryption,
+        });
+        if (finalEncryptedChunk && finalEncryptedChunk.byteLength) {
+            bufferQueue.push(finalEncryptedChunk);
+            bufferedBytes += finalEncryptedChunk.byteLength;
+        }
         let digest = null;
         if (requiresDigest) {
-            digest = await ownMode.finalizeHash(hashCtx);
+            digest = await finalizeModeHash({ mode: uploadSession.mode, hashContext: hashCtx });
             uploadSession.digest = digest;
-            const encryptedDigest = ownMode.encryptDigest(digest);
-            bufferQueue.push(encryptedDigest);
-            bufferedBytes += encryptedDigest.byteLength;
+            const encryptedDigest = digest
+                ? encryptModeDigest({ mode: uploadSession.mode, digest })
+                : null;
+            if (encryptedDigest && encryptedDigest.byteLength) {
+                bufferQueue.push(encryptedDigest);
+                bufferedBytes += encryptedDigest.byteLength;
+            }
         } else {
             uploadSession.digest = null;
         }
@@ -530,7 +648,10 @@ export default class GoogleCryptoApi {
         if (session.mode === CRYPTO_MODE_OWN) {
             session.hashAlgorithm = session.hashAlgorithm || this.getHashAlgorithm();
             if (!session.hash && session.hashAlgorithm) {
-                session.hash = ownMode.createHashContext({ algorithm: session.hashAlgorithm });
+                session.hash = createModeHashContext({
+                    mode: session.mode,
+                    algorithm: session.hashAlgorithm,
+                });
             }
         }
         const usesStreaming = this.shouldUseStreamingCrypto(session);
@@ -542,14 +663,13 @@ export default class GoogleCryptoApi {
             session.hashAlgorithm = hashAlgorithm;
         }
         const hashCtx = requiresDigest
-            ? session.hash ?? ownMode.createHashContext({ algorithm: hashAlgorithm })
+            ? session.hash ?? createModeHashContext({ mode: session.mode, algorithm: hashAlgorithm })
             : null;
         if (requiresDigest && !session.hash && hashCtx) {
             session.hash = hashCtx;
         }
         const digestSize = requiresDigest ? this.hashByteLength : 0;
         const ivSize = usesStreaming ? this.ivByteLength : 0;
-        const cryptoModule = session.mode === CRYPTO_MODE_OWN ? ownMode : rcloneMode;
         const cache = this.createDownloadCacheWriter();
         const digestBuffer = requiresDigest ? new Uint8Array(digestSize) : null;
         let digestOffset = 0;
@@ -597,13 +717,19 @@ export default class GoogleCryptoApi {
                     const blockSlice = encryptedChunk.subarray(cursor, cursor + blockLength);
                     const contentOffset = Math.max(0, absoluteOffset - ivSize);
                     const decryptedBlock = usesStreaming
-                        ? cryptoModule.decryptBlock(blockSlice, {
+                        ? decryptModeBlock({
+                            mode: session.mode,
                             context: session.decryption,
+                            chunk: blockSlice,
                             offset: contentOffset,
                         })
                         : blockSlice;
                     if (requiresDigest && hashCtx) {
-                        ownMode.updateHash(hashCtx, decryptedBlock);
+                        updateModeHash({
+                            mode: session.mode,
+                            hashContext: hashCtx,
+                            chunk: decryptedBlock,
+                        });
                     }
                     await cache.write(decryptedBlock);
                     cursor += blockLength;
@@ -616,8 +742,8 @@ export default class GoogleCryptoApi {
         }
         let calculatedDigest = null;
         if (requiresDigest && digestBuffer && hashCtx) {
-            const decryptedDigest = ownMode.decryptDigest(digestBuffer);
-            calculatedDigest = await ownMode.finalizeHash(hashCtx);
+            const decryptedDigest = decryptModeDigest({ mode: session.mode, digest: digestBuffer });
+            calculatedDigest = await finalizeModeHash({ mode: session.mode, hashContext: hashCtx });
             session.digest = calculatedDigest;
             if (!this.compareDigests(decryptedDigest, calculatedDigest)) {
                 throw this.createIntegrityError({
@@ -629,6 +755,13 @@ export default class GoogleCryptoApi {
             }
         } else {
             session.digest = null;
+        }
+        const finalDecryptedChunk = finalizeModeDecryption({
+            mode: session.mode,
+            context: session.decryption,
+        });
+        if (finalDecryptedChunk && finalDecryptedChunk.byteLength) {
+            await cache.write(finalDecryptedChunk);
         }
         const blob = await cache.finalize(restOptions.type || "application/octet-stream");
         const finalName = this.decryptFileName(result?.name ?? restOptions.name ?? "");

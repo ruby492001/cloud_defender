@@ -22,7 +22,8 @@ function xorTransform(chunk, keyBytes, ivBytes, offset = 0) {
     return out;
 }
 
-export function createEncryptionContext({ keyBytes, ivByteLength }) {
+export function createEncryptionContext({ keyBytes, ivByteLength, encryptionAlgorithm }) {
+    void encryptionAlgorithm;
     return {
         key: keyBytes,
         iv: generateIv(ivByteLength),
@@ -38,7 +39,8 @@ export function ensureEncryptionIv(context, ivByteLength) {
     return context.iv;
 }
 
-export function createDecryptionContext({ keyBytes, ivByteLength }) {
+export function createDecryptionContext({ keyBytes, ivByteLength, encryptionAlgorithm }) {
+    void encryptionAlgorithm;
     return {
         key: keyBytes,
         iv: new Uint8Array(ivByteLength),
@@ -56,4 +58,33 @@ export function decryptBlock(chunk, { context, offset = 0 }) {
         throw new Error("Rclone mode requires IV before decrypting content");
     }
     return xorTransform(chunk, context.key, context.iv, offset);
+}
+
+export function finalizeEncryption(context) {
+    void context;
+    return new Uint8Array(0);
+}
+
+export function finalizeDecryption(context) {
+    void context;
+    return new Uint8Array(0);
+}
+
+export function calculateEncryptedSize({ originalSize }) {
+    const size = Number.isFinite(originalSize) ? Number(originalSize) : 0;
+    return size;
+}
+
+export function encryptFileName(name, { keyBytes, encryptionAlgorithm, mode } = {}) {
+    void keyBytes;
+    void encryptionAlgorithm;
+    void mode;
+    return name;
+}
+
+export function decryptFileName(name, { keyBytes, encryptionAlgorithm, mode } = {}) {
+    void keyBytes;
+    void encryptionAlgorithm;
+    void mode;
+    return name;
 }
