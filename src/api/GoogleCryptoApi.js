@@ -1,4 +1,4 @@
-import {
+﻿import {
     normalizeMode as normalizeCryptoModeValue,
     createEncryptionContext as createModeEncryptionContext,
     createDecryptionContext as createModeDecryptionContext,
@@ -16,23 +16,58 @@ import {
     encryptFileName as encryptModeFileName,
     decryptFileName as decryptModeFileName,
 } from "../crypto/modes/modeDriver.js";
+import { CryptoSuite } from "../crypto/CryptoSuite.js";
+import createCfbModule from "../crypto/wasm/cfb_wasm.js";
+import {
+    parseConfig,
+    serializeConfig,
+    CONFIG_FILE_NAME,
+    KEY_FILE_NAME,
+    CONTROL_PHRASE,
+    DEFAULT_MODE,
+    DEFAULT_HASH_ALGORITHM,
+    SALT_BYTE_LENGTH,
+} from "../crypto/config.js";
+
+import {
+    normalizeAlgorithmName,
+    resolveAlgorithmId,
+    keyLengthForAlgorithm,
+    DEFAULT_ENCRYPTION_ALGORITHM,
+} from "../crypto/algorithms.js";
+
+import { deriveKeyBytes } from "../crypto/pbkdf2.js";
+import { hexToBytes, bytesToHex, concatBytes, utf8ToBytes, bytesToUtf8 } from "../utils/byteUtils.js";
 
 const DEFAULT_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB
 const DEFAULT_HASH_BYTES = 64; // SHA-512 digest length placeholder
 const IV_BYTE_LENGTH = 16;
-const DEFAULT_ENCRYPTION_ALGORITHM = "AES_256_CFB128";
 const CRYPTO_MODE_RCLONE = "rclone";
 const CRYPTO_MODE_OWN = "own";
 const INTEGRITY_ERROR_CODE = "INTEGRITY_ERROR";
 const INTEGRITY_ERROR_MESSAGE = "Data integrity corrupted";
+const PBKDF2_HASH_ALGORITHM = "SHA-256";
+const PBKDF2_ITERATIONS = 210000;
 
-// хардкодный ключ
-const KEY = "8e39cb1358f14c0cc7229e05f33d815a2cb1e6d306fe772661a50ed049be34f1";
-
-
-export const EXCLUDED_FILE_NAMES = [];
+export const EXCLUDED_FILE_NAMES = [CONFIG_FILE_NAME, KEY_FILE_NAME];
+const registerCfbSuite = (() => {
+    let registered = false;
+    return () => {
+        if (registered) return;
+        CryptoSuite.registerSuite(
+            "cfb",
+            createCfbModule,
+            (p) => (p.endsWith(".wasm") ? new URL("../crypto/wasm/cfb_wasm.wasm", import.meta.url).href : p)
+        );
+        registered = true;
+    };
+})();
+const defaultPromptPassword = async () => {
+    throw new Error("Password prompt handler is not configured");
+};
 export default class GoogleCryptoApi {
     constructor(driveApi, options = {}) {
+        registerCfbSuite();
         this.drive = driveApi;
         this._configPromise = null;
         this.blockSize = options.blockSize ?? DEFAULT_BLOCK_SIZE;
@@ -41,6 +76,15 @@ export default class GoogleCryptoApi {
         this.cryptoMode = CRYPTO_MODE_OWN;
         this.currentConfig = {};
         this._cachedKeyBytes = null;
+        this.promptPassword = typeof options.promptPassword === "function" ? options.promptPassword : defaultPromptPassword;
+        this._configFileId = null;
+        this._keyFileId = null;
+        this._configInitializationPromise = null;
+        this.onStorageInitStart =
+            typeof options.onStorageInitStart === "function" ? options.onStorageInitStart : null;
+        this.onStorageInitFinish =
+            typeof options.onStorageInitFinish === "function" ? options.onStorageInitFinish : null;
+        this._oneTimeUnlockPassword = null;
     }
     async ensureConfigLoaded() {
         if (!this._configPromise) {
@@ -57,6 +101,10 @@ export default class GoogleCryptoApi {
                     return nextConfig;
                 })
                 .catch((err) => {
+                    if (err && err.message === "Password input cancelled") {
+                        this._configPromise = null;
+                        throw err;
+                    }
                     console.warn("GoogleCryptoApi: failed to load crypto config", err);
                     this.currentConfig = { encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM };
                     this.cryptoMode = CRYPTO_MODE_OWN;
@@ -67,13 +115,325 @@ export default class GoogleCryptoApi {
         return this._configPromise;
     }
     async loadCryptoConfig() {
-        // TODO: download and parse encryption parameters/config from Drive.
-        return {
-            key: KEY,
-            mode: CRYPTO_MODE_OWN,
-            hashAlgorithm: "SHA-512",
-            encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+        const { configText, keyText, configMeta, keyMeta } = await this.ensureConfigFiles();
+        const parsed = parseConfig(configText);
+        parsed.mode = (parsed.mode || DEFAULT_MODE).toLowerCase();
+        parsed.hashAlgorithm = parsed.hashAlgorithm || DEFAULT_HASH_ALGORITHM;
+        parsed.encryptionAlgorithm = normalizeAlgorithmName(parsed.encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
+        parsed.pbkdf2Iterations = this.pickPbkdf2Iterations(parsed.pbkdf2Iterations);
+        parsed.pbkdf2Hash = this.pickPbkdf2Hash(parsed.pbkdf2Hash);
+        this._configFileId = configMeta?.id ?? this._configFileId;
+        this._keyFileId = keyMeta?.id ?? this._keyFileId;
+        if (this.normalizeCryptoMode(parsed.mode) !== CRYPTO_MODE_OWN) {
+            return parsed;
+        }
+        const unlocked = await this.unlockEncryptedKey({
+            config: parsed,
+            encryptedHex: keyText,
+        });
+        return unlocked;
+    }
+    pickPbkdf2Iterations() {
+        return PBKDF2_ITERATIONS;
+    }
+    pickPbkdf2Hash() {
+        return PBKDF2_HASH_ALGORITHM;
+    }
+    async ensureConfigFiles() {
+        const configMeta = await this.drive.findFileByName(CONFIG_FILE_NAME);
+        const keyMeta = await this.drive.findFileByName(KEY_FILE_NAME);
+        if (!configMeta || !keyMeta) {
+            await this.ensureConfigSeedCreated();
+            const refreshedConfig = await this.drive.findFileByName(CONFIG_FILE_NAME);
+            const refreshedKey = await this.drive.findFileByName(KEY_FILE_NAME);
+            if (!refreshedConfig || !refreshedKey) {
+                throw new Error("Crypto configuration files are missing after initialization attempt");
+            }
+            const configTextRetry = await this.drive.downloadSmallFile(refreshedConfig.id, { responseType: "text" });
+            const keyTextRetry = await this.drive.downloadSmallFile(refreshedKey.id, { responseType: "text" });
+            return {
+                configText: configTextRetry,
+                keyText: keyTextRetry,
+                configMeta: refreshedConfig,
+                keyMeta: refreshedKey,
+            };
+        }
+        const configText = await this.drive.downloadSmallFile(configMeta.id, { responseType: "text" });
+        const keyText = await this.drive.downloadSmallFile(keyMeta.id, { responseType: "text" });
+        return { configText, keyText, configMeta, keyMeta };
+    }
+    async ensureConfigSeedCreated() {
+        if (this._configInitializationPromise) {
+            await this._configInitializationPromise;
+            return;
+        }
+        this._configInitializationPromise = (async () => {
+            const passwordResponse = await this.requestPassword({
+                reason: "setup",
+                message: "Create a password for file encryption",
+                confirm: true,
+            });
+            let rawPassword = passwordResponse;
+            let chosenEncryption = DEFAULT_ENCRYPTION_ALGORITHM;
+            let chosenHash = DEFAULT_HASH_ALGORITHM;
+            if (passwordResponse && typeof passwordResponse === "object") {
+                rawPassword = passwordResponse.password;
+                if (passwordResponse.encryptionAlgorithm) {
+                    chosenEncryption = normalizeAlgorithmName(passwordResponse.encryptionAlgorithm);
+                }
+                if (passwordResponse.hashAlgorithm) {
+                    const hashCandidate = String(passwordResponse.hashAlgorithm).trim().toUpperCase();
+                    chosenHash = hashCandidate || DEFAULT_HASH_ALGORITHM;
+                }
+            }
+            if (typeof rawPassword !== "string" || !rawPassword.trim()) {
+                throw new Error("Password is required to initialize crypto configuration");
+            }
+            const trimmedPassword = rawPassword.trim();
+            this._oneTimeUnlockPassword = trimmedPassword;
+            try {
+                if (this.onStorageInitStart) {
+                    try {
+                        this.onStorageInitStart();
+                    } catch {}
+                }
+                const resultConfig = await this.configureCrypto({
+                    mode: CRYPTO_MODE_OWN,
+                    hashAlgorithm: chosenHash,
+                    encryptionAlgorithm: chosenEncryption,
+                    pbkdf2Iterations: PBKDF2_ITERATIONS,
+                    pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
+                    password: trimmedPassword,
+                });
+                this.currentConfig = resultConfig;
+                this.cryptoMode = this.normalizeCryptoMode(resultConfig.mode);
+                this._cachedKeyBytes = null;
+                this._cachedKeyBytes = null;
+                this.currentConfig = { ...this.currentConfig, key: resultConfig.key };
+            } finally {
+                if (this.onStorageInitFinish) {
+                    try {
+                        this.onStorageInitFinish();
+                    } catch {}
+                }
+            }
+        })();
+        try {
+            await this._configInitializationPromise;
+        } finally {
+            this._configInitializationPromise = null;
+        }
+    }
+    async requestPassword(options = {}) {
+        if (this._oneTimeUnlockPassword) {
+            const pwd = this._oneTimeUnlockPassword;
+            this._oneTimeUnlockPassword = null;
+            return pwd;
+        }
+        const handler = this.promptPassword ?? defaultPromptPassword;
+        const result = await handler(options);
+        if (result && typeof result === "object" && result.password) {
+            return result;
+        }
+        if (typeof result === "string") {
+            return result;
+        }
+        if (result === null || typeof result === "undefined" || result === false) {
+            return null;
+        }
+        return String(result);
+    }
+    async unlockEncryptedKey({ config, encryptedHex }) {
+        if (typeof encryptedHex !== "string" || !encryptedHex.trim()) {
+            throw new Error("Encrypted key payload is missing");
+        }
+        const sanitized = encryptedHex.replace(/\s+/g, "");
+        const payload = hexToBytes(sanitized);
+        if (payload.length <= SALT_BYTE_LENGTH + this.ivByteLength) {
+            throw new Error("Encrypted key payload is too short");
+        }
+        const salt = payload.slice(0, SALT_BYTE_LENGTH);
+        const ivStart = SALT_BYTE_LENGTH;
+        const ivEnd = ivStart + this.ivByteLength;
+        const iv = payload.slice(ivStart, ivEnd);
+        const ciphertext = payload.slice(ivEnd);
+        const iterations = this.pickPbkdf2Iterations(config.pbkdf2Iterations);
+        const hash = this.pickPbkdf2Hash(config.pbkdf2Hash);
+        const keyLength = keyLengthForAlgorithm(config.encryptionAlgorithm);
+        let attempt = 0;
+        while (true) {
+            const password = await this.requestPassword({
+                reason: "unlock",
+                attempt,
+                message:
+                    attempt > 0
+                        ? "Incorrect password. Try again."
+                        : "Enter the password to unlock the encryption key.",
+            });
+            const trimmedPassword = typeof password === "string" ? password.trim() : String(password).trim();
+            if (!trimmedPassword) {
+                attempt += 1;
+                continue;
+            }
+            try {
+                const derivedKey = await deriveKeyBytes({
+                    password: trimmedPassword,
+                    salt,
+                    iterations,
+                    hash,
+                    length: keyLength,
+                });
+                console.debug("[Crypto] derived PBKDF2 key:", bytesToHex(derivedKey).toLowerCase());
+                const decrypted = await this.decryptBytesWithAlgorithm({
+                    algorithm: config.encryptionAlgorithm,
+                    key: derivedKey,
+                    iv,
+                    ciphertext,
+                });
+                const plain = bytesToUtf8(decrypted).replace(/\0+$/g, "");
+                if (!plain.endsWith(CONTROL_PHRASE)) {
+                    throw new Error("CONTROL_MISMATCH");
+                }
+                const keyHex = plain.slice(0, -CONTROL_PHRASE.length).trim();
+                if (!/^[0-9a-fA-F]+$/.test(keyHex) || keyHex.length % 2 !== 0) {
+                    throw new Error("DECRYPTED_KEY_INVALID");
+                }
+                console.debug("[Crypto] decrypted key:", keyHex.toLowerCase());
+                return { ...config, key: keyHex.toLowerCase() };
+            } catch (err) {
+                attempt += 1;
+                if (attempt >= 10) {
+                    throw err instanceof Error && err.message !== "CONTROL_MISMATCH"
+                        ? err
+                        : new Error("Too many failed password attempts");
+                }
+            }
+        }
+    }
+    async decryptBytesWithAlgorithm({ algorithm, key, iv, ciphertext }) {
+        await this.ensureSuiteReady();
+        const algId = resolveAlgorithmId(algorithm);
+        const suite = CryptoSuite.cfb();
+        const context = suite.createContext(algId, key, iv, false);
+        const parts = [];
+        parts.push(context.update(ciphertext));
+        if (typeof context.finalize === "function") {
+            const finalChunk = context.finalize();
+            if (finalChunk && finalChunk.length) {
+                parts.push(finalChunk);
+            }
+        }
+        if (typeof context.free === "function") {
+            context.free();
+        }
+        return concatBytes(...parts);
+    }
+    async encryptBytesWithAlgorithm({ algorithm, key, iv, plaintext }) {
+        await this.ensureSuiteReady();
+        const algId = resolveAlgorithmId(algorithm);
+        const suite = CryptoSuite.cfb();
+        const context = suite.createContext(algId, key, iv, true);
+        const parts = [];
+        parts.push(context.update(plaintext));
+        if (typeof context.finalize === "function") {
+            const finalChunk = context.finalize();
+            if (finalChunk && finalChunk.length) {
+                parts.push(finalChunk);
+            }
+        }
+        if (typeof context.free === "function") {
+            context.free();
+        }
+        return concatBytes(...parts);
+    }
+    async ensureSuiteReady() {
+        registerCfbSuite();
+        if (typeof CryptoSuite.isReady === "function" && CryptoSuite.isReady("cfb")) {
+            return;
+        }
+        await CryptoSuite.ready("cfb");
+    }
+    generateRandomBytes(length) {
+        const out = new Uint8Array(length);
+        if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+            crypto.getRandomValues(out);
+        } else {
+            for (let i = 0; i < out.length; i += 1) {
+                out[i] = Math.floor(Math.random() * 256);
+            }
+        }
+        return out;
+    }
+    async configureCrypto(options = {}) {
+        const normalizedMode = this.normalizeCryptoMode(options.mode ?? DEFAULT_MODE);
+        if (normalizedMode !== CRYPTO_MODE_OWN) {
+            throw new Error("Only OWN mode is supported by configureCrypto");
+        }
+        const normalized = {
+            mode: normalizedMode,
+            hashAlgorithm:
+                typeof options.hashAlgorithm === "string" && options.hashAlgorithm.trim()
+                    ? options.hashAlgorithm.trim().toUpperCase()
+                    : DEFAULT_HASH_ALGORITHM,
+            encryptionAlgorithm: normalizeAlgorithmName(
+                options.encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM
+            ),
         };
+        normalized.pbkdf2Iterations = PBKDF2_ITERATIONS;
+        normalized.pbkdf2Hash = PBKDF2_HASH_ALGORITHM;
+        const password = typeof options.password === "string" ? options.password.trim() : "";
+        if (!password) {
+            throw new Error("Password is required to configure crypto");
+        }
+        const keyLength = keyLengthForAlgorithm(normalized.encryptionAlgorithm);
+        const fileKeyBytes = this.generateRandomBytes(keyLength);
+        const fileKeyHex = bytesToHex(fileKeyBytes);
+        const salt = this.generateRandomBytes(SALT_BYTE_LENGTH);
+        const derivedKey = await deriveKeyBytes({
+            password,
+            salt,
+            iterations: normalized.pbkdf2Iterations,
+            hash: normalized.pbkdf2Hash,
+            length: keyLength,
+        });
+        const iv = this.generateRandomBytes(this.ivByteLength);
+        const payload = await this.encryptBytesWithAlgorithm({
+            algorithm: normalized.encryptionAlgorithm,
+            key: derivedKey,
+            iv,
+            plaintext: utf8ToBytes(fileKeyHex + CONTROL_PHRASE),
+        });
+        const payloadHex = bytesToHex(concatBytes(salt, iv, payload));
+        const configMeta = await this.createOrUpdateTextFile({
+            name: CONFIG_FILE_NAME,
+            data: serializeConfig(normalized),
+            mimeType: "text/plain",
+        });
+        const keyMeta = await this.createOrUpdateTextFile({
+            name: KEY_FILE_NAME,
+            data: payloadHex,
+            mimeType: "text/plain",
+        });
+        this._configFileId = configMeta?.id ?? this._configFileId;
+        this._keyFileId = keyMeta?.id ?? this._keyFileId;
+        this.currentConfig = { ...normalized, key: fileKeyHex.toLowerCase() };
+        this.cryptoMode = this.normalizeCryptoMode(normalized.mode);
+        this._cachedKeyBytes = null;
+        this._configPromise = Promise.resolve(this.currentConfig);
+        return this.currentConfig;
+    }
+    async createOrUpdateTextFile({ name, data, mimeType = "text/plain" }) {
+        const existing = await this.drive.findFileByName(name);
+        if (existing?.id) {
+            await this.drive.updateFileContent(existing.id, data, mimeType);
+            return existing;
+        }
+        return this.drive.uploadSmallFile({
+            name,
+            data,
+            mimeType,
+            parentId: "root",
+        });
     }
     normalizeCryptoMode(mode) {
         const normalized = normalizeCryptoModeValue(mode);

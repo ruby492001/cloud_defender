@@ -3,9 +3,29 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DriveApi } from '../api/drive.js'
 import GoogleCryptoApi from '../api/GoogleCryptoApi.js'
 
-export function useDrive(token){
+export function useDrive(token, options = {}){
+    const { requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish } = options || {}
     const coreApi = useMemo(()=> new DriveApi(token), [token])
-    const api = useMemo(()=> new GoogleCryptoApi(coreApi), [coreApi])
+    const api = useMemo(()=> new GoogleCryptoApi(coreApi, {
+        promptPassword: requestPassword,
+        pbkdf2Iterations,
+        pbkdf2Hash,
+        onStorageInitStart,
+        onStorageInitFinish,
+    }), [coreApi, requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish])
+    const [configReady, setConfigReady] = useState(false)
+    useEffect(()=>{
+        let cancelled = false
+        ;(async()=>{
+            try{
+                await api.ensureConfigLoaded()
+            }catch(e){
+            }finally{
+                if(!cancelled) setConfigReady(true)
+            }
+        })()
+        return ()=>{ cancelled = true }
+    }, [api])
 
     // Навигация
     const [currentFolder, setCurrentFolder] = useState('root')
@@ -66,5 +86,5 @@ export function useDrive(token){
         if(currentFolder){ setItems([]); setNextPageToken(undefined); await loadMore(currentFolder, undefined, search, true) }
     }, [currentFolder, loadMore, search])
 
-    return { api, items, loading, error, currentFolder, nextPageToken, loadMore, openFolder, upTo, breadcrumb, setSearch, refresh, sort, setSortBy }
+    return { api, items, loading, error, currentFolder, nextPageToken, loadMore, openFolder, upTo, breadcrumb, setSearch, refresh, sort, setSortBy, configReady }
 }

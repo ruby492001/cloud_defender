@@ -4,6 +4,7 @@
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3'
 const DRIVE_UPLOAD_INIT =
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink";
+const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3/files";
 
 export class DriveApi {
     constructor(token) {
@@ -104,6 +105,29 @@ export class DriveApi {
         });
         if (!res.ok) throw new Error(`copy failed ${res.status}`);
         return res.json();
+    }
+
+    async findFileByName(name, parentId = "root") {
+        if (!name) return null;
+        const url = new URL(`${DRIVE_BASE}/files`);
+        const escapedName = name.replace(/'/g, "\\'");
+        url.searchParams.set(
+            "q",
+            `name='${escapedName}' and '${parentId}' in parents and trashed = false`
+        );
+        url.searchParams.set("fields", "files(id,name,mimeType,parents,size,modifiedTime)");
+        url.searchParams.set("pageSize", "1");
+        url.searchParams.set("supportsAllDrives", "true");
+        url.searchParams.set("includeItemsFromAllDrives", "true");
+        url.searchParams.set("spaces", "drive");
+        url.searchParams.set("corpora", "user");
+        const res = await fetch(url, { headers: this.authHeaders() });
+        if (!res.ok) {
+            const t = await res.text().catch(() => "");
+            throw new Error(`findFileByName failed ${res.status} ${t}`);
+        }
+        const data = await res.json();
+        return (data.files && data.files[0]) || null;
     }
 
     async downloadInChunks({ id, name, size, onProgress, signal, onChunk, concurrency = 3 }) {
@@ -231,27 +255,18 @@ export class DriveApi {
             mimeType,
             ...(parentId ? { parents: [parentId] } : {}),
         };
-        const form = new FormData();
-        form.append(
-            "metadata",
-            new Blob([JSON.stringify(metadata)], { type: "application/json" })
-        );
-        const fileBlob =
-            data instanceof Blob || data instanceof File
-                ? data
-                : new Blob([data], { type: mimeType });
-        form.append("file", fileBlob, name);
-
-        const res = await fetch(`${DRIVE_BASE}/files?uploadType=multipart&supportsAllDrives=true`, {
+        const createRes = await fetch(`${DRIVE_BASE}/files?supportsAllDrives=true`, {
             method: "POST",
-            headers: this.authHeaders(),
-            body: form,
+            headers: this.authHeaders({ "Content-Type": "application/json; charset=UTF-8" }),
+            body: JSON.stringify(metadata),
         });
-        if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`Small upload failed ${res.status} ${text}`);
+        if (!createRes.ok) {
+            const text = await createRes.text();
+            throw new Error(`Small upload metadata failed ${createRes.status} ${text}`);
         }
-        return res.json();
+        const created = await createRes.json();
+        await this.updateFileContent(created.id, data, mimeType);
+        return created;
     }
 
     async downloadSmallFile(id, { responseType = "blob" } = {}) {
@@ -270,4 +285,42 @@ export class DriveApi {
         }
         return res.blob();
     }
+
+    async updateFileContent(id, data, mimeType = "application/octet-stream") {
+        const body = await this._asBlob(data, mimeType);
+        const res = await fetch(
+            `${DRIVE_UPLOAD_BASE}/${id}?uploadType=media&supportsAllDrives=true`,
+            {
+                method: "PATCH",
+                headers: this.authHeaders({ "Content-Type": mimeType }),
+                body,
+            }
+        );
+        if (!res.ok) {
+            const text = await res.text().catch(() => "");
+            throw new Error(`update content failed ${res.status} ${text}`);
+        }
+        return res.json();
+    }
+
+    async _asBlob(data, mimeType) {
+        if (data instanceof Blob) {
+            return data;
+        }
+        if (typeof File !== "undefined" && data instanceof File) {
+            return data;
+        }
+        if (data instanceof ArrayBuffer) {
+            return new Blob([data], { type: mimeType });
+        }
+        if (ArrayBuffer.isView(data)) {
+            const slice = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+            return new Blob([slice], { type: mimeType });
+        }
+        if (typeof data === "string") {
+            return new Blob([data], { type: mimeType });
+        }
+        throw new TypeError("Unsupported data type for Drive upload");
+    }
+
 }

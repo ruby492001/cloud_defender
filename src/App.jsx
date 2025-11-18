@@ -1,4 +1,4 @@
-﻿import {useEffect, useState, useCallback, useRef, useMemo} from "react";
+import {useEffect, useState, useRef, useMemo, useCallback} from "react";
 import { useGoogleLogin, hasGrantedAllScopesGoogle } from "@react-oauth/google";
 import FileUploader from "./components/FileUploader";
 import FolderUploader from "./components/FolderUploader";
@@ -13,6 +13,7 @@ import DropHintOverlay from "./components/DropHintOverlay.jsx";
 import {useDrive} from "./hooks/useDrive.js";
 import {DownloadProvider, useDownload} from "./state/DownloadManager.jsx";
 import { BusyProvider, useBusy } from "./components/BusyOverlay.jsx";
+import { PasswordPromptProvider, usePasswordPrompt } from "./state/PasswordPromptProvider.jsx";
 import {CryptoSuite} from "./crypto/CryptoSuite.js";
 import createCfbModule from './crypto/wasm/cfb_wasm.js';
 
@@ -34,13 +35,21 @@ function onSuccessLogin(tokenResponse) {
     return false;
 }
 
-const accessToken = "ya29.a0ATi6K2tAjKoo40INDn9oJff4RJwnoEixsWTNOYANbnQOQbkMhpdJAZ1OgTFblQMOeWNuRB0WvaKWI187x5Hm6zlq9xhmus7BVusCNAMuYOICOcJljTniHbdJBtl9ZiN8BMlWxzq4XXEDVJ8E5YD08T01jHoNRDEeB8Nm7VVoRVDFmhIbxt5jMwF9mBtQZ5YThBcYeQjtaCgYKASESARUSFQHGX2MiTKSRhEnWBefME_0r6Be1vg0207"
+const accessToken = "ya29.a0ATi6K2t3zBYN3wF5Z5_c78YEiZpZ-Ul3KUgOM3KO-tkIF96S2wGrxYvQox42gltZVkXUOuNOHJdG-nrxYVJTXktcIxE_rkXA6Ks2dSYWpjUDShM3Mxe1iOy7mZtKFrogMVhLVCdCFl3Hbe6jrZV1FKu97eKXaAWBJ8N8zh8hC_JKh6snWqAsFNPbLb8iE4U9Km-5oYPm0QaCgYKAb4SARUSFQHGX2MiDJjuewjbTO7AjEClww45vg0209"
 
-export default function App() {
-    const drive = useDrive(accessToken)
-    const {api} = drive
-    const [cryptoReady, setCryptoReady] = useState(false);
+function AppContent() {
+    const { requestPassword } = usePasswordPrompt();
+    const [creatingStorage, setCreatingStorage] = useState(false);
+    const handleStorageInitStart = useCallback(() => setCreatingStorage(true), []);
+    const handleStorageInitFinish = useCallback(() => setCreatingStorage(false), []);
+    const drive = useDrive(accessToken, {
+        requestPassword,
+        onStorageInitStart: handleStorageInitStart,
+        onStorageInitFinish: handleStorageInitFinish,
+    });
+    const {api, loading: driveLoading, configReady} = drive
     const initStarted = useRef(false);
+    const [dataLoaded, setDataLoaded] = useState(false);
 
 
     const login = useGoogleLogin({
@@ -54,7 +63,7 @@ export default function App() {
     }
 
     useEffect(() => {
-        if (initStarted.current) return;           // защита от двойного вызова (StrictMode/HMR)
+        if (initStarted.current) return;           // ������ �� �������� ������ (StrictMode/HMR)
         initStarted.current = true;
 
         CryptoSuite.registerSuite(
@@ -66,9 +75,18 @@ export default function App() {
         );
         (async () => {
             await CryptoSuite.ready('cfb');
-            setCryptoReady(true);
         })();
     }, []);
+
+    useEffect(() => {
+        if (!configReady || dataLoaded) return;
+        if (!driveLoading) {
+            setDataLoaded(true);
+        }
+    }, [configReady, dataLoaded, driveLoading]);
+
+    const showInitSpinner = creatingStorage || !configReady || !dataLoaded;
+    const spinnerMessage = creatingStorage ? "Creating storage" : !configReady ? "Reading settings" : "Encryption";
 
     const uploadManager = useUploadManager({
         cryptoApi: api,
@@ -394,22 +412,82 @@ export default function App() {
     }, []);
 
     return (
-        <BusyProvider>
-            <div style={{padding: 20, fontFamily: "roboto-mono, sans-serif"}}>
-                <h2>Google Drive React Demo</h2>
-                <button onClick={tryLogin}>Login with Google</button>
-                <DropHintOverlay visible={isOver}/>
+        <div style={{padding: 20, fontFamily: "roboto-mono, sans-serif"}}>
+            <StartupSpinner visible={showInitSpinner} message={spinnerMessage} />
+            <h2>Google Drive React Demo</h2>
+            <button onClick={tryLogin}>Login with Google</button>
+            <DropHintOverlay visible={isOver}/>
 
-                <DownloadProvider api={api}>
-                    <TransferTrayConnector uploadManager={uploadManager} />
-                    <AppShell uploadManager={uploadManager} {...drive} />
-                </DownloadProvider>
+            <DownloadProvider api={api}>
+                <TransferTrayConnector uploadManager={uploadManager} />
+                <AppShell uploadManager={uploadManager} {...drive} />
+            </DownloadProvider>
 
-            </div>
-        </BusyProvider>
+        </div>
     );
 }
 
 
 
+
+
+export default function App() {
+    return (
+        <PasswordPromptProvider>
+            <BusyProvider>
+                <AppContent />
+            </BusyProvider>
+        </PasswordPromptProvider>
+    );
+}
+
+function StartupSpinner({ visible, message }) {
+    if (!visible) return null;
+    return (
+        <div style={startupSpinnerStyles.backdrop}>
+            <div style={startupSpinnerStyles.card}>
+                <div style={startupSpinnerStyles.loader} />
+                <div style={startupSpinnerStyles.text}>{message}</div>
+            </div>
+        </div>
+    );
+}
+
+const startupSpinnerStyles = {
+    backdrop: {
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.75)",
+        backdropFilter: "blur(6px)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 6000,
+    },
+    card: {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 16,
+        padding: "32px 48px",
+        borderRadius: 20,
+        background: "rgba(15, 23, 42, 0.9)",
+        border: "1px solid rgba(148, 163, 184, 0.3)",
+        boxShadow: "0 25px 70px rgba(0,0,0,0.6)",
+        minWidth: 260,
+        color: "#e5e7eb",
+        fontSize: 16,
+    },
+    loader: {
+        width: 56,
+        height: 56,
+        borderRadius: "50%",
+        border: "6px solid rgba(148, 163, 184, 0.2)",
+        borderTopColor: "#3b82f6",
+        animation: "busyspin 0.9s linear infinite",
+    },
+    text: {
+        fontSize: 18,
+        fontWeight: 500,
+    },
+};
 
