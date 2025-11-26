@@ -33,6 +33,7 @@ const INTEGRITY_ERROR_CODE = 'INTEGRITY_ERROR'
 const INTEGRITY_ERROR_MESSAGE = 'Data integrity corrupted'
 
 const savedOnce = new Set()
+const canUseFileSystemSave = () => typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function'
 
 export function DownloadProvider({ api, children }){
     const [tasks, setTasks] = useState([])
@@ -41,7 +42,8 @@ export function DownloadProvider({ api, children }){
     const chunkConcurrency = 4
     const [dockVisible, setDockVisible] = useState(false)
 
-    const saveBlobOnce = (taskId, name, blob)=>{
+    const saveBlobOnce = (taskId, name, blob, afterRevoke)=>{
+        if(!blob) return
         if(savedOnce.has(taskId)) return
         savedOnce.add(taskId)
         const url = URL.createObjectURL(blob)
@@ -57,7 +59,19 @@ export function DownloadProvider({ api, children }){
                 a.dispatchEvent(new MouseEvent('click', { bubbles:true, cancelable:true, view:window }))
                 a.remove()
             } finally {
-                setTimeout(()=> URL.revokeObjectURL(url), 0)
+                setTimeout(()=>{
+                    URL.revokeObjectURL(url)
+                    if(typeof afterRevoke === 'function'){
+                        try{
+                            const result = afterRevoke()
+                            if(result && typeof result.then === 'function'){
+                                result.catch(err => console.warn('Download cleanup failed', err))
+                            }
+                        }catch(err){
+                            console.warn('Download cleanup threw', err)
+                        }
+                    }
+                }, 0)
             }
         })
     }
@@ -115,12 +129,13 @@ export function DownloadProvider({ api, children }){
 
     const downloadFileTask = async (task, signal)=>{
         task.crypto = task.crypto || { uploadSession: null, downloadSession: null }
-        const { blob, name, session } = await api.downloadInChunks({
+        const { blob, name, session, savedToFile, cleanup, asBlob } = await api.downloadInChunks({
             id: task.fileId,
             name: task.name,
             size: task.size ?? undefined,
             session: task.crypto?.downloadSession,
             signal,
+            fileHandle: task.fileHandle,
             concurrency: chunkConcurrency,
             onProgress: (loaded, total)=>{
                 setTasks(ts => ts.map(t => {
@@ -140,7 +155,25 @@ export function DownloadProvider({ api, children }){
             task.crypto.downloadSession = session
             patchTask(task.id, { crypto: { downloadSession: session } })
         }
-        saveBlobOnce(task.id, name, blob)
+        if(savedToFile){
+            if(typeof cleanup === 'function'){
+                try{
+                    await cleanup()
+                }catch(err){
+                    console.warn('Download cleanup failed', err)
+                }
+            }
+            return
+        }
+        const ensureBlob = async()=>{
+            if(blob) return blob
+            if(typeof asBlob === 'function'){
+                return asBlob()
+            }
+            return blob
+        }
+        const finalBlob = await ensureBlob()
+        saveBlobOnce(task.id, name, finalBlob, cleanup)
     }
 
     const walkFolder = async (folderId, basePath, onEntry) => {
@@ -170,7 +203,7 @@ export function DownloadProvider({ api, children }){
 
         for(const f of files){
             if(signal?.aborted) throw new DOMException('aborted','AbortError')
-            const { blob, size } = await api.downloadInChunks({
+            const { blob, size, cleanup, asBlob, opfsHandle } = await api.downloadInChunks({
                 id: f.id, name: f.name, size: f.size ?? undefined, signal,
                 concurrency: chunkConcurrency,
                 onProgress: (loaded, total)=>{
@@ -187,7 +220,22 @@ export function DownloadProvider({ api, children }){
                     }))
                 }
             })
-            const arrBuf = await blob.arrayBuffer()
+            const ensureBlob = async()=>{
+                if(blob) return blob
+                if(typeof asBlob === 'function'){
+                    return asBlob()
+                }
+                return blob
+            }
+            const effectiveBlob = await ensureBlob()
+            const arrBuf = await effectiveBlob.arrayBuffer()
+            if(typeof cleanup === 'function'){
+                try{
+                    await cleanup()
+                }catch(err){
+                    console.warn('Failed to cleanup temp download file', err)
+                }
+            }
             zip.file(f.path, arrBuf)
             acc += totalBytesKnown ? (size ?? arrBuf.byteLength) : 1
             const pct = totalBytesKnown ? Math.min(99, Math.round((acc/totalBytes)*100))
@@ -205,28 +253,47 @@ export function DownloadProvider({ api, children }){
     }
 
     const enqueue = (file)=>{
-        setDockVisible(true)
-        const baseMeta = { id: file.id, name: file.name, size: file.size }
-        const downloadSession = (file?.cryptoContext?.downloadSession) || (api.createDownloadSession ? api.createDownloadSession(baseMeta) : null)
-        setTasks(ts => {
+        const run = async ()=>{
             const kind = file.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file'
-            const task = {
-                id: newTaskId(),
-                fileId: file.id,
-                name: file.name,
-                size: file.size? Number(file.size): undefined,
-                progress: 0,
-                status: 'queued',
-                startedAt: null,
-                etaSeconds: null,
-                kind,
-                crypto: { uploadSession: null, downloadSession }
+            let fileHandle = null
+            if(kind === 'file' && canUseFileSystemSave()){
+                try{
+                    fileHandle = await window.showSaveFilePicker({ suggestedName: file.name })
+                }catch(err){
+                    if(err?.name === 'AbortError'){
+                        return
+                    }
+                    console.warn('Save picker failed, falling back to blob download', err)
+                    fileHandle = null
+                }
             }
-            return [...ts, task]
-        })
+            if(kind === 'file' && canUseFileSystemSave() && !fileHandle){
+                return
+            }
+            setDockVisible(true)
+            const baseMeta = { id: file.id, name: file.name, size: file.size }
+            const downloadSession = (file?.cryptoContext?.downloadSession) || (api.createDownloadSession ? api.createDownloadSession(baseMeta) : null)
+            setTasks(ts => {
+                const task = {
+                    id: newTaskId(),
+                    fileId: file.id,
+                    name: file.name,
+                    size: file.size? Number(file.size): undefined,
+                    progress: 0,
+                    status: 'queued',
+                    startedAt: null,
+                    etaSeconds: null,
+                    kind,
+                    fileHandle: fileHandle || null,
+                    crypto: { uploadSession: null, downloadSession }
+                }
+                return [...ts, task]
+            })
+        }
+        return run()
     }
 
-    const enqueueMany = (files)=> { for(const f of files) enqueue(f) }
+    const enqueueMany = (files)=> files.reduce((chain, item)=> chain.then(()=> enqueue(item)), Promise.resolve())
 
     const cancel = (taskId)=> setTasks(ts => ts.map(t => t.id===taskId ? (t.abort?.abort(), { ...t, status: t.status==='done' ? 'done' : 'canceled', abort: undefined, etaSeconds: null }) : t))
     const remove = (taskId)=> setTasks(ts => ts.map(t => t.id===taskId ? { ...t, removed:true } : t))

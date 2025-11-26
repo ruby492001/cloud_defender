@@ -683,15 +683,84 @@ export default class GoogleCryptoApi {
         }
         return true;
     }
-    createDownloadCacheWriter() {
-        // TODO: swap with disk-based cache (IndexedDB/File System Access) for large files.
+    createDownloadCacheWriter(options = {}) {
+        const { fileHandle } = options || {};
+        if (fileHandle && typeof fileHandle.createWritable === "function") {
+            let writerPromise = null;
+            let closed = false;
+            let writtenBytes = 0;
+            const ensureWriter = () => {
+                if (!writerPromise) {
+                    writerPromise = fileHandle.createWritable();
+                }
+                return writerPromise;
+            };
+            const closeWriter = async () => {
+                if (!writerPromise || closed) {
+                    return null;
+                }
+                try {
+                    const writer = await writerPromise;
+                    if (writer?.close && !closed) {
+                        await writer.close();
+                        closed = true;
+                    }
+                    return writer;
+                } catch (err) {
+                    closed = true;
+                    throw err;
+                }
+            };
+            return {
+                async write(chunk) {
+                    if (!chunk || !chunk.byteLength) return;
+                    const writer = await ensureWriter();
+                    await writer.write(chunk);
+                    writtenBytes += chunk.byteLength;
+                },
+                async finalize() {
+                    if (!writerPromise) {
+                        await ensureWriter();
+                    }
+                    try {
+                        await closeWriter();
+                    } catch {
+                        // ignore close errors, abort will handle cleanup.
+                    }
+                    return { blob: null, size: writtenBytes, savedToFile: true, cleanup: null };
+                },
+                async abort() {
+                    if (!writerPromise || closed) return;
+                    try {
+                        const writer = await writerPromise;
+                        if (writer?.abort) {
+                            await writer.abort();
+                        } else if (writer?.close) {
+                            await writer.close();
+                        }
+                    } catch (err) {
+                        console.warn("Failed to abort download writer", err);
+                    } finally {
+                        closed = true;
+                    }
+                },
+            };
+        }
+        return this._createMemoryCacheWriter();
+    }
+    _createMemoryCacheWriter() {
         const chunks = [];
         return {
             async write(chunk) {
+                if (!chunk || !chunk.byteLength) return;
                 chunks.push(chunk.slice());
             },
             async finalize(type = "application/octet-stream") {
-                return new Blob(chunks, { type });
+                const blob = chunks.length ? new Blob(chunks, { type }) : new Blob([], { type });
+                return { blob, size: blob.size, savedToFile: false, cleanup: null };
+            },
+            async abort() {
+                chunks.length = 0;
             },
         };
     }
@@ -995,7 +1064,7 @@ export default class GoogleCryptoApi {
     async downloadInChunks(options = {}) {
         await this.ensureConfigLoaded();
         const normalizedOptions = options || {};
-        const { session: providedSession, ...restOptions } = normalizedOptions;
+        const { session: providedSession, fileHandle, ...restOptions } = normalizedOptions;
         const metaForSession = {
             id: restOptions.id,
             name: restOptions.name,
@@ -1030,73 +1099,81 @@ export default class GoogleCryptoApi {
         }
         const digestSize = requiresDigest ? this.hashByteLength : 0;
         const ivSize = usesStreaming ? this.ivByteLength : 0;
-        const cache = this.createDownloadCacheWriter();
+        const cache = this.createDownloadCacheWriter({ fileHandle });
         const digestBuffer = requiresDigest ? new Uint8Array(digestSize) : null;
         let digestOffset = 0;
         let totalBytes = 0;
         let ivBytesRead = 0;
-        const result = await this.drive.downloadInChunks({
-            ...restOptions,
-            onChunk: async (encryptedChunk, meta) => {
-                const { offset, total } = meta;
-                totalBytes = total;
-                const contentSize = Math.max(0, total - digestSize);
-                let absoluteOffset = offset;
-                let cursor = 0;
-                while (cursor < encryptedChunk.byteLength) {
-                    if (usesStreaming && ivBytesRead < ivSize) {
-                        const remainingIv = ivSize - ivBytesRead;
-                        const take = Math.min(remainingIv, encryptedChunk.byteLength - cursor);
-                        if (take > 0) {
-                            const ivSlice = encryptedChunk.subarray(cursor, cursor + take);
-                            if (session.decryption?.iv) {
-                                session.decryption.iv.set(ivSlice, ivBytesRead);
+        let result;
+        try {
+            result = await this.drive.downloadInChunks({
+                ...restOptions,
+                onChunk: async (encryptedChunk, meta) => {
+                    const { offset, total } = meta;
+                    totalBytes = total;
+                    const contentSize = Math.max(0, total - digestSize);
+                    let absoluteOffset = offset;
+                    let cursor = 0;
+                    while (cursor < encryptedChunk.byteLength) {
+                        if (usesStreaming && ivBytesRead < ivSize) {
+                            const remainingIv = ivSize - ivBytesRead;
+                            const take = Math.min(remainingIv, encryptedChunk.byteLength - cursor);
+                            if (take > 0) {
+                                const ivSlice = encryptedChunk.subarray(cursor, cursor + take);
+                                if (session.decryption?.iv) {
+                                    session.decryption.iv.set(ivSlice, ivBytesRead);
+                                }
+                                cursor += take;
+                                absoluteOffset += take;
+                                ivBytesRead += take;
+                                if (cursor >= encryptedChunk.byteLength) {
+                                    break;
+                                }
+                                continue;
                             }
-                            cursor += take;
-                            absoluteOffset += take;
-                            ivBytesRead += take;
-                            if (cursor >= encryptedChunk.byteLength) {
-                                break;
+                        }
+                        if (requiresDigest && absoluteOffset >= contentSize) {
+                            const digestSlice = encryptedChunk.subarray(cursor);
+                            const remainingDigest = Math.max(0, digestSize - digestOffset);
+                            const copySlice =
+                                remainingDigest < digestSlice.length ? digestSlice.subarray(0, remainingDigest) : digestSlice;
+                            if (copySlice.length > 0 && digestBuffer) {
+                                digestBuffer.set(copySlice, digestOffset);
+                                digestOffset += copySlice.length;
                             }
-                            continue;
+                            break;
                         }
-                    }
-                    if (requiresDigest && absoluteOffset >= contentSize) {
-                        const digestSlice = encryptedChunk.subarray(cursor);
-                        const remainingDigest = Math.max(0, digestSize - digestOffset);
-                        const copySlice =
-                            remainingDigest < digestSlice.length ? digestSlice.subarray(0, remainingDigest) : digestSlice;
-                        if (copySlice.length > 0 && digestBuffer) {
-                            digestBuffer.set(copySlice, digestOffset);
-                            digestOffset += copySlice.length;
+                        const remainingContent = contentSize - absoluteOffset;
+                        const blockLength = Math.min(this.blockSize, remainingContent, encryptedChunk.byteLength - cursor);
+                        const blockSlice = encryptedChunk.subarray(cursor, cursor + blockLength);
+                        const contentOffset = Math.max(0, absoluteOffset - ivSize);
+                        const decryptedBlock = usesStreaming
+                            ? decryptModeBlock({
+                                mode: session.mode,
+                                context: session.decryption,
+                                chunk: blockSlice,
+                                offset: contentOffset,
+                            })
+                            : blockSlice;
+                        if (requiresDigest && hashCtx) {
+                            updateModeHash({
+                                mode: session.mode,
+                                hashContext: hashCtx,
+                                chunk: decryptedBlock,
+                            });
                         }
-                        break;
+                        await cache.write(decryptedBlock);
+                        cursor += blockLength;
+                        absoluteOffset += blockLength;
                     }
-                    const remainingContent = contentSize - absoluteOffset;
-                    const blockLength = Math.min(this.blockSize, remainingContent, encryptedChunk.byteLength - cursor);
-                    const blockSlice = encryptedChunk.subarray(cursor, cursor + blockLength);
-                    const contentOffset = Math.max(0, absoluteOffset - ivSize);
-                    const decryptedBlock = usesStreaming
-                        ? decryptModeBlock({
-                            mode: session.mode,
-                            context: session.decryption,
-                            chunk: blockSlice,
-                            offset: contentOffset,
-                        })
-                        : blockSlice;
-                    if (requiresDigest && hashCtx) {
-                        updateModeHash({
-                            mode: session.mode,
-                            hashContext: hashCtx,
-                            chunk: decryptedBlock,
-                        });
-                    }
-                    await cache.write(decryptedBlock);
-                    cursor += blockLength;
-                    absoluteOffset += blockLength;
-                }
-            },
-        });
+                },
+            });
+        } catch (err) {
+            if (cache?.abort) {
+                await cache.abort().catch(() => {});
+            }
+            throw err;
+        }
         if (session.decryption) {
             session.decryption.ivBytesRead = ivBytesRead;
         }
@@ -1123,12 +1200,15 @@ export default class GoogleCryptoApi {
         if (finalDecryptedChunk && finalDecryptedChunk.byteLength) {
             await cache.write(finalDecryptedChunk);
         }
-        const blob = await cache.finalize(restOptions.type || "application/octet-stream");
+        const finalized = await cache.finalize(restOptions.type || "application/octet-stream");
         const finalName = this.decryptFileName(result?.name ?? restOptions.name ?? "");
         return {
-            blob,
+            blob: finalized?.blob ?? null,
             name: finalName,
-            size: blob.size,
+            size: finalized?.size ?? 0,
+            savedToFile: Boolean(finalized?.savedToFile),
+            cleanup: finalized?.cleanup || null,
+            asBlob: finalized?.asBlob || null,
             session,
         };
     }
