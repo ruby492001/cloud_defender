@@ -34,6 +34,7 @@ const INTEGRITY_ERROR_MESSAGE = 'Data integrity corrupted'
 
 const savedOnce = new Set()
 const canUseFileSystemSave = () => typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function'
+const STREAMING_THRESHOLD_BYTES = 300 * 1024 * 1024
 
 export function DownloadProvider({ api, children }){
     const [tasks, setTasks] = useState([])
@@ -256,7 +257,9 @@ export function DownloadProvider({ api, children }){
         const run = async ()=>{
             const kind = file.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file'
             let fileHandle = null
-            if(kind === 'file' && canUseFileSystemSave()){
+            const fileSize = Number(file.size || 0)
+            const shouldStreamDirect = kind === 'file' && canUseFileSystemSave() && fileSize >= STREAMING_THRESHOLD_BYTES
+            if(shouldStreamDirect){
                 try{
                     fileHandle = await window.showSaveFilePicker({ suggestedName: file.name })
                 }catch(err){
@@ -267,10 +270,7 @@ export function DownloadProvider({ api, children }){
                     fileHandle = null
                 }
             }
-            if(kind === 'file' && canUseFileSystemSave() && !fileHandle){
-                return
-            }
-            setDockVisible(true)
+       	setDockVisible(true)
             const baseMeta = { id: file.id, name: file.name, size: file.size }
             const downloadSession = (file?.cryptoContext?.downloadSession) || (api.createDownloadSession ? api.createDownloadSession(baseMeta) : null)
             setTasks(ts => {
@@ -285,6 +285,7 @@ export function DownloadProvider({ api, children }){
                     etaSeconds: null,
                     kind,
                     fileHandle: fileHandle || null,
+                    requiresHandle: shouldStreamDirect,
                     crypto: { uploadSession: null, downloadSession }
                 }
                 return [...ts, task]
