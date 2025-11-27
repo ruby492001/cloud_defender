@@ -8,7 +8,11 @@ import {
     useState,
 } from "react";
 import { ENCRYPTION_ALGORITHMS, DEFAULT_ENCRYPTION_ALGORITHM } from "../crypto/algorithms.js";
-import { DEFAULT_HASH_ALGORITHM } from "../crypto/config.js";
+import {
+    DEFAULT_HASH_ALGORITHM,
+    DEFAULT_FILENAME_ENCRYPTION,
+    DEFAULT_DIRECTORY_NAME_ENCRYPTION,
+} from "../crypto/config.js";
 
 const PasswordPromptContext = createContext(null);
 
@@ -81,6 +85,13 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
     const [localError, setLocalError] = useState("");
     const [encryptionAlgorithm, setEncryptionAlgorithm] = useState(DEFAULT_ENCRYPTION_ALGORITHM);
     const [hashAlgorithm, setHashAlgorithm] = useState(DEFAULT_HASH_ALGORITHM);
+    const [mode, setMode] = useState("own");
+    const [rcloneFilenameEncryption, setRcloneFilenameEncryption] = useState(DEFAULT_FILENAME_ENCRYPTION);
+    const [rcloneDirectoryEncryption, setRcloneDirectoryEncryption] = useState(
+        DEFAULT_DIRECTORY_NAME_ENCRYPTION ? "true" : "false"
+    );
+    const [rclonePassword, setRclonePassword] = useState("");
+    const [rclonePassword2, setRclonePassword2] = useState("");
 
     const options = request?.options || {};
 
@@ -91,6 +102,11 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
         setLocalError("");
         setEncryptionAlgorithm(DEFAULT_ENCRYPTION_ALGORITHM);
         setHashAlgorithm(DEFAULT_HASH_ALGORITHM);
+        setMode("own");
+        setRcloneFilenameEncryption(DEFAULT_FILENAME_ENCRYPTION);
+        setRcloneDirectoryEncryption(DEFAULT_DIRECTORY_NAME_ENCRYPTION ? "true" : "false");
+        setRclonePassword("");
+        setRclonePassword2("");
     }, [request?.id]);
 
     if (!request) {
@@ -119,13 +135,30 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
             setLocalError("Passwords do not match");
             return;
         }
+        const normalizedMode = mode === "rclone" ? "rclone" : "own";
+        if (normalizedMode === "rclone") {
+            if (!rclonePassword.trim() || !rclonePassword2.trim()) {
+                setLocalError("Both rclone passwords are required");
+                return;
+            }
+        }
         setLocalError("");
         if (options.reason === "setup") {
-            onSubmit({
+            const payload = {
                 password: trimmed,
                 encryptionAlgorithm,
                 hashAlgorithm,
-            });
+                mode: normalizedMode,
+            };
+            if (normalizedMode === "rclone") {
+                payload.rclone = {
+                    filenameEncryption: rcloneFilenameEncryption,
+                    directoryNameEncryption: rcloneDirectoryEncryption === "true",
+                    password: rclonePassword.trim(),
+                    password2: rclonePassword2.trim(),
+                };
+            }
+            onSubmit(payload);
         } else {
             onSubmit(trimmed);
         }
@@ -137,6 +170,23 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                 <h2 style={overlayStyles.title}>{title}</h2>
                 <p style={overlayStyles.message}>{message}</p>
                 <form onSubmit={handleSubmit} style={overlayStyles.form}>
+                    {options.reason === "setup" && (
+                        <label style={overlayStyles.label}>
+                            Encryption mode
+                            <select
+                                value={mode}
+                                onChange={(e) => {
+                                    setMode(e.target.value);
+                                    setLocalError("");
+                                }}
+                                style={overlayStyles.select}
+                            >
+                                <option value="own">Собственный алгоритм шифрования</option>
+                                <option value="rclone">rclone</option>
+                            </select>
+                        </label>
+                    )}
+
                     <label style={overlayStyles.label}>
                         Password
                         <div style={overlayStyles.inputRow}>
@@ -170,7 +220,7 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                             />
                         </label>
                     )}
-                    {options.reason === "setup" && (
+                    {options.reason === "setup" && mode === "own" && (
                         <>
                             <label style={overlayStyles.label}>
                                 Encryption algorithm
@@ -199,6 +249,53 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                                         </option>
                                     ))}
                                 </select>
+                            </label>
+                        </>
+                    )}
+                    {options.reason === "setup" && mode === "rclone" && (
+                        <>
+                            <label style={overlayStyles.label}>
+                                How to encrypt the filenames.
+                                <select
+                                    value={rcloneFilenameEncryption}
+                                    onChange={(e) => setRcloneFilenameEncryption(e.target.value)}
+                                    style={overlayStyles.select}
+                                >
+                                    <option value="standard">Encrypt the filenames</option>
+                                    <option value="obfuscate">Very simple filename obfuscation</option>
+                                    <option value="off">Don't encrypt the file names</option>
+                                </select>
+                            </label>
+                            <label style={overlayStyles.label}>
+                                Encrypt directory name
+                                <select
+                                    value={rcloneDirectoryEncryption}
+                                    onChange={(e) => setRcloneDirectoryEncryption(e.target.value)}
+                                    style={overlayStyles.select}
+                                >
+                                    <option value="true">Encrypt directory names</option>
+                                    <option value="false">Don't encrypt directory names, leave them intact.</option>
+                                </select>
+                            </label>
+                            <label style={overlayStyles.label}>
+                                password
+                                <input
+                                    type={showPassword ? "text" : "password"}
+                                    value={rclonePassword}
+                                    onChange={(e) => setRclonePassword(e.target.value)}
+                                    style={overlayStyles.input}
+                                    placeholder="password from rclone config"
+                                />
+                            </label>
+                            <label style={overlayStyles.label}>
+                                password2
+                                <input
+                                    type={showPassword ? "text" : "password"}
+                                    value={rclonePassword2}
+                                    onChange={(e) => setRclonePassword2(e.target.value)}
+                                    style={overlayStyles.input}
+                                    placeholder="password2 from rclone config"
+                                />
                             </label>
                         </>
                     )}

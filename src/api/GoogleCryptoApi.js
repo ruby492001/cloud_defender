@@ -23,10 +23,14 @@ import {
     serializeConfig,
     CONFIG_FILE_NAME,
     KEY_FILE_NAME,
+    RCLONE_KEY_FILE_1,
+    RCLONE_KEY_FILE_2,
     CONTROL_PHRASE,
     DEFAULT_MODE,
     DEFAULT_HASH_ALGORITHM,
     SALT_BYTE_LENGTH,
+    DEFAULT_FILENAME_ENCRYPTION,
+    DEFAULT_DIRECTORY_NAME_ENCRYPTION,
 } from "../crypto/config.js";
 
 import {
@@ -49,7 +53,12 @@ const INTEGRITY_ERROR_MESSAGE = "Data integrity corrupted";
 const PBKDF2_HASH_ALGORITHM = "SHA-256";
 const PBKDF2_ITERATIONS = 210000;
 
-export const EXCLUDED_FILE_NAMES = [CONFIG_FILE_NAME, KEY_FILE_NAME];
+export const EXCLUDED_FILE_NAMES = [
+    CONFIG_FILE_NAME,
+    KEY_FILE_NAME,
+    RCLONE_KEY_FILE_1,
+    RCLONE_KEY_FILE_2,
+];
 const registerCfbSuite = (() => {
     let registered = false;
     return () => {
@@ -79,6 +88,8 @@ export default class GoogleCryptoApi {
         this.promptPassword = typeof options.promptPassword === "function" ? options.promptPassword : defaultPromptPassword;
         this._configFileId = null;
         this._keyFileId = null;
+        this._rcloneKey1Id = null;
+        this._rcloneKey2Id = null;
         this._configInitializationPromise = null;
         this.onStorageInitStart =
             typeof options.onStorageInitStart === "function" ? options.onStorageInitStart : null;
@@ -115,7 +126,8 @@ export default class GoogleCryptoApi {
         return this._configPromise;
     }
     async loadCryptoConfig() {
-        const { configText, keyText, configMeta, keyMeta } = await this.ensureConfigFiles();
+        const { configText, keyText, key1Text, key2Text, configMeta, keyMeta, key1Meta, key2Meta } =
+            await this.ensureConfigFiles();
         const parsed = parseConfig(configText);
         parsed.mode = (parsed.mode || DEFAULT_MODE).toLowerCase();
         parsed.hashAlgorithm = parsed.hashAlgorithm || DEFAULT_HASH_ALGORITHM;
@@ -124,8 +136,15 @@ export default class GoogleCryptoApi {
         parsed.pbkdf2Hash = this.pickPbkdf2Hash(parsed.pbkdf2Hash);
         this._configFileId = configMeta?.id ?? this._configFileId;
         this._keyFileId = keyMeta?.id ?? this._keyFileId;
+        this._rcloneKey1Id = key1Meta?.id ?? this._rcloneKey1Id;
+        this._rcloneKey2Id = key2Meta?.id ?? this._rcloneKey2Id;
         if (this.normalizeCryptoMode(parsed.mode) !== CRYPTO_MODE_OWN) {
-            return parsed;
+            const unlockedRclone = await this.unlockRcloneKeys({
+                config: parsed,
+                encryptedPrimary: key1Text,
+                encryptedSecondary: key2Text,
+            });
+            return unlockedRclone;
         }
         const unlocked = await this.unlockEncryptedKey({
             config: parsed,
@@ -142,25 +161,47 @@ export default class GoogleCryptoApi {
     async ensureConfigFiles() {
         const configMeta = await this.drive.findFileByName(CONFIG_FILE_NAME);
         const keyMeta = await this.drive.findFileByName(KEY_FILE_NAME);
-        if (!configMeta || !keyMeta) {
+        const key1Meta = await this.drive.findFileByName(RCLONE_KEY_FILE_1);
+        const key2Meta = await this.drive.findFileByName(RCLONE_KEY_FILE_2);
+        const hasRcloneKeys = Boolean(key1Meta && key2Meta);
+        if (!configMeta || (!keyMeta && !hasRcloneKeys)) {
             await this.ensureConfigSeedCreated();
             const refreshedConfig = await this.drive.findFileByName(CONFIG_FILE_NAME);
             const refreshedKey = await this.drive.findFileByName(KEY_FILE_NAME);
-            if (!refreshedConfig || !refreshedKey) {
+            const refreshedKey1 = await this.drive.findFileByName(RCLONE_KEY_FILE_1);
+            const refreshedKey2 = await this.drive.findFileByName(RCLONE_KEY_FILE_2);
+            const refreshedHasRcloneKeys = Boolean(refreshedKey1 && refreshedKey2);
+            if (!refreshedConfig || (!refreshedKey && !refreshedHasRcloneKeys)) {
                 throw new Error("Crypto configuration files are missing after initialization attempt");
             }
-            const configTextRetry = await this.drive.downloadSmallFile(refreshedConfig.id, { responseType: "text" });
-            const keyTextRetry = await this.drive.downloadSmallFile(refreshedKey.id, { responseType: "text" });
+            const configTextRetry = await this.drive.downloadSmallFile(refreshedConfig.id, {
+                responseType: "text",
+            });
+            const keyTextRetry = refreshedKey
+                ? await this.drive.downloadSmallFile(refreshedKey.id, { responseType: "text" })
+                : null;
+            const key1TextRetry = refreshedKey1
+                ? await this.drive.downloadSmallFile(refreshedKey1.id, { responseType: "text" })
+                : null;
+            const key2TextRetry = refreshedKey2
+                ? await this.drive.downloadSmallFile(refreshedKey2.id, { responseType: "text" })
+                : null;
             return {
                 configText: configTextRetry,
                 keyText: keyTextRetry,
+                key1Text: key1TextRetry,
+                key2Text: key2TextRetry,
                 configMeta: refreshedConfig,
                 keyMeta: refreshedKey,
+                key1Meta: refreshedKey1,
+                key2Meta: refreshedKey2,
             };
         }
         const configText = await this.drive.downloadSmallFile(configMeta.id, { responseType: "text" });
-        const keyText = await this.drive.downloadSmallFile(keyMeta.id, { responseType: "text" });
-        return { configText, keyText, configMeta, keyMeta };
+        const keyText = keyMeta ? await this.drive.downloadSmallFile(keyMeta.id, { responseType: "text" }) : null;
+        const key1Text = key1Meta ? await this.drive.downloadSmallFile(key1Meta.id, { responseType: "text" }) : null;
+        const key2Text = key2Meta ? await this.drive.downloadSmallFile(key2Meta.id, { responseType: "text" }) : null;
+        return { configText, keyText, key1Text, key2Text, configMeta, keyMeta, key1Meta, key2Meta };
     }
     async ensureConfigSeedCreated() {
         if (this._configInitializationPromise) {
@@ -176,6 +217,13 @@ export default class GoogleCryptoApi {
             let rawPassword = passwordResponse;
             let chosenEncryption = DEFAULT_ENCRYPTION_ALGORITHM;
             let chosenHash = DEFAULT_HASH_ALGORITHM;
+            let chosenMode = CRYPTO_MODE_OWN;
+            let rcloneOptions = {
+                filenameEncryption: DEFAULT_FILENAME_ENCRYPTION,
+                directoryNameEncryption: DEFAULT_DIRECTORY_NAME_ENCRYPTION,
+                rclonePassword: "",
+                rclonePassword2: "",
+            };
             if (passwordResponse && typeof passwordResponse === "object") {
                 rawPassword = passwordResponse.password;
                 if (passwordResponse.encryptionAlgorithm) {
@@ -184,6 +232,24 @@ export default class GoogleCryptoApi {
                 if (passwordResponse.hashAlgorithm) {
                     const hashCandidate = String(passwordResponse.hashAlgorithm).trim().toUpperCase();
                     chosenHash = hashCandidate || DEFAULT_HASH_ALGORITHM;
+                }
+                if (passwordResponse.mode) {
+                    chosenMode = this.normalizeCryptoMode(passwordResponse.mode);
+                }
+                if (chosenMode === CRYPTO_MODE_RCLONE && passwordResponse.rclone) {
+                    const rclone = passwordResponse.rclone;
+                    rcloneOptions = {
+                        filenameEncryption:
+                            rclone.filenameEncryption ||
+                            rclone.fileNameEncryption ||
+                            DEFAULT_FILENAME_ENCRYPTION,
+                        directoryNameEncryption:
+                            typeof rclone.directoryNameEncryption === "boolean"
+                                ? rclone.directoryNameEncryption
+                                : rclone.directoryNameEncryption ?? DEFAULT_DIRECTORY_NAME_ENCRYPTION,
+                        rclonePassword: rclone.password || "",
+                        rclonePassword2: rclone.password2 || "",
+                    };
                 }
             }
             if (typeof rawPassword !== "string" || !rawPassword.trim()) {
@@ -197,14 +263,30 @@ export default class GoogleCryptoApi {
                         this.onStorageInitStart();
                     } catch {}
                 }
-                const resultConfig = await this.configureCrypto({
-                    mode: CRYPTO_MODE_OWN,
-                    hashAlgorithm: chosenHash,
-                    encryptionAlgorithm: chosenEncryption,
-                    pbkdf2Iterations: PBKDF2_ITERATIONS,
-                    pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
-                    password: trimmedPassword,
-                });
+                const resultConfig =
+                    chosenMode === CRYPTO_MODE_RCLONE
+                        ? await this.configureRcloneCrypto({
+                              mode: CRYPTO_MODE_RCLONE,
+                              hashAlgorithm: chosenHash,
+                              encryptionAlgorithm: chosenEncryption,
+                              pbkdf2Iterations: PBKDF2_ITERATIONS,
+                              pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
+                              password: trimmedPassword,
+                              filenameEncryption: rcloneOptions.filenameEncryption,
+                              directoryNameEncryption: this.normalizeDirectoryNameEncryption(
+                                  rcloneOptions.directoryNameEncryption
+                              ),
+                              rclonePassword: rcloneOptions.rclonePassword,
+                              rclonePassword2: rcloneOptions.rclonePassword2,
+                          })
+                        : await this.configureCrypto({
+                              mode: CRYPTO_MODE_OWN,
+                              hashAlgorithm: chosenHash,
+                              encryptionAlgorithm: chosenEncryption,
+                              pbkdf2Iterations: PBKDF2_ITERATIONS,
+                              pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
+                              password: trimmedPassword,
+                          });
                 this.currentConfig = resultConfig;
                 this.cryptoMode = this.normalizeCryptoMode(resultConfig.mode);
                 this._cachedKeyBytes = null;
@@ -310,6 +392,76 @@ export default class GoogleCryptoApi {
             }
         }
     }
+    async unlockRcloneKeys({ config, encryptedPrimary, encryptedSecondary }) {
+        if (typeof encryptedPrimary !== "string" || typeof encryptedSecondary !== "string") {
+            throw new Error("Encrypted rclone key payloads are missing");
+        }
+        const iterations = this.pickPbkdf2Iterations(config.pbkdf2Iterations);
+        const hash = this.pickPbkdf2Hash(config.pbkdf2Hash);
+        const algorithm = normalizeAlgorithmName(config.encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
+        let attempt = 0;
+        const normalizedFilenameEncryption = this.normalizeFilenameEncryptionOption(
+            config.filenameEncryption || config.fileNameEncryption || DEFAULT_FILENAME_ENCRYPTION
+        );
+        const normalizedDirectoryEncryption = this.normalizeDirectoryNameEncryption(
+            config.directoryNameEncryption
+        );
+        while (true) {
+            const password = await this.requestPassword({
+                reason: "unlock",
+                attempt,
+                message:
+                    attempt > 0
+                        ? "Incorrect password. Try again."
+                        : "Enter the password to unlock the encryption key.",
+            });
+            const trimmedPassword = typeof password === "string" ? password.trim() : String(password).trim();
+            if (!trimmedPassword) {
+                attempt += 1;
+                continue;
+            }
+            try {
+                const primary = await this.decryptSecretPayload({
+                    encryptedHex: encryptedPrimary,
+                    password: trimmedPassword,
+                    encryptionAlgorithm: algorithm,
+                    pbkdf2Iterations: iterations,
+                    pbkdf2Hash: hash,
+                });
+                const secondary = await this.decryptSecretPayload({
+                    encryptedHex: encryptedSecondary,
+                    password: trimmedPassword,
+                    encryptionAlgorithm: algorithm,
+                    pbkdf2Iterations: iterations,
+                    pbkdf2Hash: hash,
+                });
+                const combinedKey = await this.deriveRcloneContentKey(primary, secondary, algorithm);
+                const unlockedConfig = {
+                    ...config,
+                    mode: CRYPTO_MODE_RCLONE,
+                    filenameEncryption: normalizedFilenameEncryption,
+                    directoryNameEncryption: normalizedDirectoryEncryption,
+                    encryptionAlgorithm: algorithm,
+                    pbkdf2Iterations: iterations,
+                    pbkdf2Hash: hash,
+                    key: combinedKey.toLowerCase(),
+                    rclonePassword: primary,
+                    rclonePassword2: secondary,
+                };
+                this.currentConfig = unlockedConfig;
+                this.cryptoMode = CRYPTO_MODE_RCLONE;
+                this._cachedKeyBytes = null;
+                return unlockedConfig;
+            } catch (err) {
+                attempt += 1;
+                if (attempt >= 10) {
+                    throw err instanceof Error && err.message !== "CONTROL_MISMATCH"
+                        ? err
+                        : new Error("Too many failed password attempts");
+                }
+            }
+        }
+    }
     async decryptBytesWithAlgorithm({ algorithm, key, iv, ciphertext }) {
         await this.ensureSuiteReady();
         const algId = resolveAlgorithmId(algorithm);
@@ -363,6 +515,86 @@ export default class GoogleCryptoApi {
             }
         }
         return out;
+    }
+    async encryptSecretPayload({
+        plaintext,
+        password,
+        encryptionAlgorithm,
+        pbkdf2Iterations,
+        pbkdf2Hash,
+    }) {
+        const normalizedAlgorithm = normalizeAlgorithmName(encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
+        const normalizedPassword = typeof password === "string" ? password : String(password ?? "");
+        const salt = this.generateRandomBytes(SALT_BYTE_LENGTH);
+        const keyLength = keyLengthForAlgorithm(normalizedAlgorithm);
+        const derivedKey = await deriveKeyBytes({
+            password: normalizedPassword,
+            salt,
+            iterations: this.pickPbkdf2Iterations(pbkdf2Iterations),
+            hash: this.pickPbkdf2Hash(pbkdf2Hash),
+            length: keyLength,
+        });
+        const iv = this.generateRandomBytes(this.ivByteLength);
+        const payload = await this.encryptBytesWithAlgorithm({
+            algorithm: normalizedAlgorithm,
+            key: derivedKey,
+            iv,
+            plaintext: utf8ToBytes(String(plaintext ?? "") + CONTROL_PHRASE),
+        });
+        return bytesToHex(concatBytes(salt, iv, payload));
+    }
+    async decryptSecretPayload({
+        encryptedHex,
+        password,
+        encryptionAlgorithm,
+        pbkdf2Iterations,
+        pbkdf2Hash,
+    }) {
+        if (typeof encryptedHex !== "string" || !encryptedHex.trim()) {
+            throw new Error("Encrypted payload is missing");
+        }
+        const sanitized = encryptedHex.replace(/\s+/g, "");
+        const payload = hexToBytes(sanitized);
+        if (payload.length <= SALT_BYTE_LENGTH + this.ivByteLength) {
+            throw new Error("Encrypted payload is too short");
+        }
+        const salt = payload.slice(0, SALT_BYTE_LENGTH);
+        const ivStart = SALT_BYTE_LENGTH;
+        const ivEnd = ivStart + this.ivByteLength;
+        const iv = payload.slice(ivStart, ivEnd);
+        const ciphertext = payload.slice(ivEnd);
+        const normalizedAlgorithm = normalizeAlgorithmName(encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
+        const keyLength = keyLengthForAlgorithm(normalizedAlgorithm);
+        const derivedKey = await deriveKeyBytes({
+            password,
+            salt,
+            iterations: this.pickPbkdf2Iterations(pbkdf2Iterations),
+            hash: this.pickPbkdf2Hash(pbkdf2Hash),
+            length: keyLength,
+        });
+        const decrypted = await this.decryptBytesWithAlgorithm({
+            algorithm: normalizedAlgorithm,
+            key: derivedKey,
+            iv,
+            ciphertext,
+        });
+        const plain = bytesToUtf8(decrypted).replace(/\0+$/g, "");
+        if (!plain.endsWith(CONTROL_PHRASE)) {
+            throw new Error("CONTROL_MISMATCH");
+        }
+        return plain.slice(0, -CONTROL_PHRASE.length);
+    }
+    async deriveRcloneContentKey(primary, secondary, encryptionAlgorithm = DEFAULT_ENCRYPTION_ALGORITHM) {
+        const combined = `${primary}:${secondary}`;
+        const normalizedAlgorithm = normalizeAlgorithmName(encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
+        const derived = await deriveKeyBytes({
+            password: combined,
+            salt: utf8ToBytes("rclone-derived-key"),
+            iterations: PBKDF2_ITERATIONS,
+            hash: PBKDF2_HASH_ALGORITHM,
+            length: keyLengthForAlgorithm(normalizedAlgorithm),
+        });
+        return bytesToHex(derived);
     }
     async configureCrypto(options = {}) {
         const normalizedMode = this.normalizeCryptoMode(options.mode ?? DEFAULT_MODE);
@@ -418,6 +650,95 @@ export default class GoogleCryptoApi {
         this._keyFileId = keyMeta?.id ?? this._keyFileId;
         this.currentConfig = { ...normalized, key: fileKeyHex.toLowerCase() };
         this.cryptoMode = this.normalizeCryptoMode(normalized.mode);
+        this._cachedKeyBytes = null;
+        this._configPromise = Promise.resolve(this.currentConfig);
+        return this.currentConfig;
+    }
+    normalizeFilenameEncryptionOption(value) {
+        const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+        if (normalized === "obfuscate") return "obfuscate";
+        if (normalized === "off" || normalized === "none" || normalized === "plain") return "off";
+        return DEFAULT_FILENAME_ENCRYPTION;
+    }
+    normalizeDirectoryNameEncryption(value) {
+        if (typeof value === "boolean") return value;
+        const normalized = String(value ?? "").trim().toLowerCase();
+        if (!normalized) return DEFAULT_DIRECTORY_NAME_ENCRYPTION;
+        if (normalized === "false" || normalized === "0" || normalized === "off") return false;
+        return true;
+    }
+    async configureRcloneCrypto(options = {}) {
+        const basePassword = typeof options.password === "string" ? options.password.trim() : "";
+        if (!basePassword) {
+            throw new Error("Password is required to configure crypto");
+        }
+        const primarySecret = typeof options.rclonePassword === "string" ? options.rclonePassword.trim() : "";
+        const secondarySecret = typeof options.rclonePassword2 === "string" ? options.rclonePassword2.trim() : "";
+        if (!primarySecret || !secondarySecret) {
+            throw new Error("Both rclone passwords are required");
+        }
+        const normalized = {
+            mode: CRYPTO_MODE_RCLONE,
+            hashAlgorithm:
+                typeof options.hashAlgorithm === "string" && options.hashAlgorithm.trim()
+                    ? options.hashAlgorithm.trim().toUpperCase()
+                    : DEFAULT_HASH_ALGORITHM,
+            encryptionAlgorithm: normalizeAlgorithmName(
+                options.encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM
+            ),
+        };
+        normalized.pbkdf2Iterations = this.pickPbkdf2Iterations(options.pbkdf2Iterations);
+        normalized.pbkdf2Hash = this.pickPbkdf2Hash(options.pbkdf2Hash);
+        normalized.filenameEncryption = this.normalizeFilenameEncryptionOption(
+            options.filenameEncryption || DEFAULT_FILENAME_ENCRYPTION
+        );
+        normalized.directoryNameEncryption = this.normalizeDirectoryNameEncryption(
+            options.directoryNameEncryption
+        );
+        const primaryPayload = await this.encryptSecretPayload({
+            plaintext: primarySecret,
+            password: basePassword,
+            encryptionAlgorithm: normalized.encryptionAlgorithm,
+            pbkdf2Iterations: normalized.pbkdf2Iterations,
+            pbkdf2Hash: normalized.pbkdf2Hash,
+        });
+        const secondaryPayload = await this.encryptSecretPayload({
+            plaintext: secondarySecret,
+            password: basePassword,
+            encryptionAlgorithm: normalized.encryptionAlgorithm,
+            pbkdf2Iterations: normalized.pbkdf2Iterations,
+            pbkdf2Hash: normalized.pbkdf2Hash,
+        });
+        const combinedKey = await this.deriveRcloneContentKey(
+            primarySecret,
+            secondarySecret,
+            normalized.encryptionAlgorithm
+        );
+        const configMeta = await this.createOrUpdateTextFile({
+            name: CONFIG_FILE_NAME,
+            data: serializeConfig(normalized),
+            mimeType: "text/plain",
+        });
+        const key1Meta = await this.createOrUpdateTextFile({
+            name: RCLONE_KEY_FILE_1,
+            data: primaryPayload,
+            mimeType: "text/plain",
+        });
+        const key2Meta = await this.createOrUpdateTextFile({
+            name: RCLONE_KEY_FILE_2,
+            data: secondaryPayload,
+            mimeType: "text/plain",
+        });
+        this._configFileId = configMeta?.id ?? this._configFileId;
+        this._rcloneKey1Id = key1Meta?.id ?? this._rcloneKey1Id;
+        this._rcloneKey2Id = key2Meta?.id ?? this._rcloneKey2Id;
+        this.currentConfig = {
+            ...normalized,
+            key: combinedKey.toLowerCase(),
+            rclonePassword: primarySecret,
+            rclonePassword2: secondarySecret,
+        };
+        this.cryptoMode = CRYPTO_MODE_RCLONE;
         this._cachedKeyBytes = null;
         this._configPromise = Promise.resolve(this.currentConfig);
         return this.currentConfig;
