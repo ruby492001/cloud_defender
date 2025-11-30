@@ -173,14 +173,14 @@ export default class GoogleCryptoApi {
         const keyMeta = await this.drive.findFileByName(KEY_FILE_NAME);
         const key1Meta = await this.drive.findFileByName(RCLONE_KEY_FILE_1);
         const key2Meta = await this.drive.findFileByName(RCLONE_KEY_FILE_2);
-        const hasRcloneKeys = Boolean(key1Meta && key2Meta);
+        const hasRcloneKeys = Boolean(key1Meta);
         if (!configMeta || (!keyMeta && !hasRcloneKeys)) {
             await this.ensureConfigSeedCreated();
             const refreshedConfig = await this.drive.findFileByName(CONFIG_FILE_NAME);
             const refreshedKey = await this.drive.findFileByName(KEY_FILE_NAME);
             const refreshedKey1 = await this.drive.findFileByName(RCLONE_KEY_FILE_1);
             const refreshedKey2 = await this.drive.findFileByName(RCLONE_KEY_FILE_2);
-            const refreshedHasRcloneKeys = Boolean(refreshedKey1 && refreshedKey2);
+            const refreshedHasRcloneKeys = Boolean(refreshedKey1);
             if (!refreshedConfig || (!refreshedKey && !refreshedHasRcloneKeys)) {
                 throw new Error("Crypto configuration files are missing after initialization attempt");
             }
@@ -193,9 +193,10 @@ export default class GoogleCryptoApi {
             const key1TextRetry = refreshedKey1
                 ? await this.drive.downloadSmallFile(refreshedKey1.id, { responseType: "text" })
                 : null;
-            const key2TextRetry = refreshedKey2
-                ? await this.drive.downloadSmallFile(refreshedKey2.id, { responseType: "text" })
-                : null;
+            const key2TextRetry =
+                refreshedKey2 && refreshedHasRcloneKeys
+                    ? await this.drive.downloadSmallFile(refreshedKey2.id, { responseType: "text" })
+                    : null;
             return {
                 configText: configTextRetry,
                 keyText: keyTextRetry,
@@ -403,7 +404,7 @@ export default class GoogleCryptoApi {
         }
     }
     async unlockRcloneKeys({ config, encryptedPrimary, encryptedSecondary }) {
-        if (typeof encryptedPrimary !== "string" || typeof encryptedSecondary !== "string") {
+        if (typeof encryptedPrimary !== "string") {
             throw new Error("Encrypted rclone key payloads are missing");
         }
         const iterations = this.pickPbkdf2Iterations(config.pbkdf2Iterations);
@@ -438,13 +439,16 @@ export default class GoogleCryptoApi {
                     pbkdf2Iterations: iterations,
                     pbkdf2Hash: hash,
                 });
-                const secondarySecret = await this.decryptSecretPayload({
-                    encryptedHex: encryptedSecondary,
-                    password: trimmedPassword,
-                    encryptionAlgorithm: algorithm,
-                    pbkdf2Iterations: iterations,
-                    pbkdf2Hash: hash,
-                });
+                const secondarySecret =
+                    typeof encryptedSecondary === "string" && encryptedSecondary.trim()
+                        ? await this.decryptSecretPayload({
+                              encryptedHex: encryptedSecondary,
+                              password: trimmedPassword,
+                              encryptionAlgorithm: algorithm,
+                              pbkdf2Iterations: iterations,
+                              pbkdf2Hash: hash,
+                          })
+                        : "";
                 const keyMaterial = await this.deriveRcloneKeyMaterial(primarySecret, secondarySecret);
                 const unlockedConfig = {
                     ...config,
@@ -708,9 +712,10 @@ export default class GoogleCryptoApi {
         const primaryRaw = typeof options.rclonePassword === "string" ? options.rclonePassword.trim() : "";
         const secondaryRaw = typeof options.rclonePassword2 === "string" ? options.rclonePassword2.trim() : "";
         const primarySecret = await this.revealRcloneSecret(primaryRaw);
-        const secondarySecret = await this.revealRcloneSecret(secondaryRaw);
-        if (!primarySecret || !secondarySecret) {
-            throw new Error("Both rclone passwords are required");
+        const secondarySecretRaw = await this.revealRcloneSecret(secondaryRaw);
+        const secondarySecret = secondarySecretRaw ?? "";
+        if (!primarySecret) {
+            throw new Error("Primary rclone password is required");
         }
         const normalized = {
             mode: CRYPTO_MODE_RCLONE,
@@ -728,13 +733,16 @@ export default class GoogleCryptoApi {
             pbkdf2Iterations: PBKDF2_ITERATIONS,
             pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
         });
-        const secondaryPayload = await this.encryptSecretPayload({
-            plaintext: secondarySecret,
-            password: basePassword,
-            encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
-            pbkdf2Iterations: PBKDF2_ITERATIONS,
-            pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
-        });
+        const secondaryPayload =
+            secondarySecret !== ""
+                ? await this.encryptSecretPayload({
+                      plaintext: secondarySecret,
+                      password: basePassword,
+                      encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+                      pbkdf2Iterations: PBKDF2_ITERATIONS,
+                      pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
+                  })
+                : null;
         const keyMaterial = await this.deriveRcloneKeyMaterial(primarySecret, secondarySecret);
         this._oneTimeUnlockPassword = basePassword;
         const combinedKey = bytesToHex(keyMaterial);
@@ -748,11 +756,14 @@ export default class GoogleCryptoApi {
             data: primaryPayload,
             mimeType: "text/plain",
         });
-        const key2Meta = await this.createOrUpdateTextFile({
-            name: RCLONE_KEY_FILE_2,
-            data: secondaryPayload,
-            mimeType: "text/plain",
-        });
+        let key2Meta = null;
+        if (secondaryPayload) {
+            key2Meta = await this.createOrUpdateTextFile({
+                name: RCLONE_KEY_FILE_2,
+                data: secondaryPayload,
+                mimeType: "text/plain",
+            });
+        }
         this._configFileId = configMeta?.id ?? this._configFileId;
         this._rcloneKey1Id = key1Meta?.id ?? this._rcloneKey1Id;
         this._rcloneKey2Id = key2Meta?.id ?? this._rcloneKey2Id;
@@ -895,6 +906,11 @@ export default class GoogleCryptoApi {
         }
         const normalizedMode = this.normalizeCryptoMode(this.getCryptoMode());
         const keyBytes = this.getKeyBytes();
+        // Fast-path: rclone with filename_encryption=off – return plain name (strip suffix if present).
+        const cfgFileEnc = (this.currentConfig?.filenameEncryption || "").trim().toLowerCase();
+        if (normalizedMode === CRYPTO_MODE_RCLONE && cfgFileEnc === "off") {
+            return name.endsWith(".bin") ? name.slice(0, -4) : name;
+        }
         try {
             return decryptModeFileName({
                 mode: normalizedMode,

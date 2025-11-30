@@ -35,7 +35,7 @@ function onSuccessLogin(tokenResponse) {
     return false;
 }
 
-const accessToken = "ya29.a0ATi6K2t3zBYN3wF5Z5_c78YEiZpZ-Ul3KUgOM3KO-tkIF96S2wGrxYvQox42gltZVkXUOuNOHJdG-nrxYVJTXktcIxE_rkXA6Ks2dSYWpjUDShM3Mxe1iOy7mZtKFrogMVhLVCdCFl3Hbe6jrZV1FKu97eKXaAWBJ8N8zh8hC_JKh6snWqAsFNPbLb8iE4U9Km-5oYPm0QaCgYKAb4SARUSFQHGX2MiDJjuewjbTO7AjEClww45vg0209"
+const accessToken = "ya29.a0ATi6K2u0wFCYBZ1ineWS0tvdlXSG8OMHrVTYQe_p7nf2rTI8bcPfCJrtEnKzpsY7GgnqEehlvyjtzwGIwOh9F4hXVQm4ubwKKCG9wZ7nEBhecFWpXuH9WZFsd2hmanyj-GVQ-BWqkrEAZwmhnmihsQwWfinvX2ZhS7_aSWLqTyXXau_r5RCOrWhShejUmsUYcyGEhOpC0AaCgYKAaoSARUSFQHGX2Mi4pIr22sJkdITNyrDyfS5Tw0209"
 
 function AppContent() {
     const { requestPassword } = usePasswordPrompt();
@@ -189,7 +189,8 @@ function AppContent() {
             if(v && v.trim()){
                 const trimmed = v.trim()
                 const shouldEncrypt = !(api.isExcludedName?.(trimmed))
-                await api.renameFile(item.id, trimmed, { encrypted: !shouldEncrypt })
+                const isDirectory = item.mimeType === 'application/vnd.google-apps.folder'
+                await api.renameFile(item.id, trimmed, { encrypted: !shouldEncrypt, isDirectory, mimeType: item.mimeType })
                 await refresh()
             }
         }

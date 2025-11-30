@@ -518,7 +518,8 @@ export function encryptFileName(
     if (!name) return name;
     const mode = (filenameEncryption || "standard").toLowerCase();
     if (mode === "off") {
-        return name + ENCRYPTED_SUFFIX;
+        // In rclone, plaintext files get ".bin" suffix; directories remain untouched.
+        return isDirectory ? name : name + ENCRYPTED_SUFFIX;
     }
     if (!(keyBytes instanceof Uint8Array) || keyBytes.length < 80) {
         throw new Error("Rclone mode requires 80 bytes of key material");
@@ -546,10 +547,9 @@ export function decryptFileName(
     if (!name) return name;
     const mode = (filenameEncryption || "standard").toLowerCase();
     if (mode === "off") {
-        if (!name.endsWith(ENCRYPTED_SUFFIX)) {
-            throw new Error("Not an encrypted file (missing suffix)");
-        }
-        return name.slice(0, -ENCRYPTED_SUFFIX.length);
+        return name.endsWith(ENCRYPTED_SUFFIX)
+            ? name.slice(0, -ENCRYPTED_SUFFIX.length)
+            : name;
     }
     if (!(keyBytes instanceof Uint8Array) || keyBytes.length < 80) {
         throw new Error("Rclone mode requires 80 bytes of key material");
@@ -557,7 +557,7 @@ export function decryptFileName(
     if (isDirectory && directoryNameEncryption === false) {
         return name;
     }
-    const looksObfuscated = (seg) => /^\d+\./.test(seg);
+    const looksBase32 = (seg) => /^[A-Z2-7]+=*$/i.test(seg);
     const context = {
         nameKey: keyBytes.subarray(32, 64),
         nameTweak: keyBytes.subarray(64, 80),
@@ -566,9 +566,17 @@ export function decryptFileName(
     const lastIdx = segments.length - 1;
     for (let i = 0; i < segments.length; i += 1) {
         if (directoryNameEncryption === false && (i !== lastIdx || isDirectory)) continue;
-        const seg = segments[i];
+        const originalSeg = segments[i];
         if (mode === "obfuscate") {
-            segments[i] = deobfuscateSegment(seg, context);
+            segments[i] = deobfuscateSegment(originalSeg, context);
+            continue;
+        }
+        // For "standard" names rclone appends ".bin" to encrypted names; strip before decoding.
+        const hasSuffix = mode === "standard" && originalSeg.endsWith(ENCRYPTED_SUFFIX);
+        const seg = hasSuffix ? originalSeg.slice(0, -ENCRYPTED_SUFFIX.length) : originalSeg;
+        if (mode === "standard" && !looksBase32(seg)) {
+            // Not an encrypted/encoded segment; return plain (restore suffix removal).
+            segments[i] = hasSuffix ? seg : originalSeg;
             continue;
         }
         segments[i] = decryptSegment(seg, context);

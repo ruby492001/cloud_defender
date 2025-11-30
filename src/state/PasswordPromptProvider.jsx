@@ -137,8 +137,8 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
         }
         const normalizedMode = mode === "rclone" ? "rclone" : "own";
         if (normalizedMode === "rclone") {
-            if (!rclonePassword.trim() || !rclonePassword2.trim()) {
-                setLocalError("Both rclone passwords are required");
+            if (!rclonePassword.trim()) {
+                setLocalError("Primary rclone password is required");
                 return;
             }
         }
@@ -288,13 +288,13 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                                 />
                             </label>
                             <label style={overlayStyles.label}>
-                                password2
+                                password2 (optional)
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     value={rclonePassword2}
                                     onChange={(e) => setRclonePassword2(e.target.value)}
                                     style={overlayStyles.input}
-                                    placeholder="password2 from rclone config"
+                                    placeholder="password2 from rclone config (optional)"
                                 />
                             </label>
                         </>

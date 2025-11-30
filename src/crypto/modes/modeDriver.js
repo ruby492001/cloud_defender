@@ -222,15 +222,21 @@ export function decryptFileName({
     if (typeof isExcludedName === "function" && isExcludedName(name)) {
         return name;
     }
+    const normalizedMode = typeof mode === "string" ? mode.trim().toLowerCase() : mode;
+    const normalizedFilenameEnc =
+        typeof filenameEncryption === "string" ? filenameEncryption.trim().toLowerCase() : "";
+    if (normalizedMode === "rclone" && normalizedFilenameEnc === "off") {
+        return name.endsWith(".bin") ? name.slice(0, -4) : name;
+    }
     if (!(keyBytes instanceof Uint8Array) || keyBytes.length === 0) {
         throw new Error("Decryption key is required to decrypt file names");
     }
-    const impl = getImplementation(mode);
+    const impl = getImplementation(normalizedMode);
     if (typeof impl.decryptFileName === "function") {
         return impl.decryptFileName(name, {
             keyBytes,
             encryptionAlgorithm,
-            mode,
+            mode: normalizedMode,
             isExcludedName,
             filenameEncryption,
             directoryNameEncryption,
