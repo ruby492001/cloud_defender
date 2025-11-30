@@ -1115,11 +1115,7 @@ export default class GoogleCryptoApi {
                     if (!writerPromise) {
                         await ensureWriter();
                     }
-                    try {
-                        await closeWriter();
-                    } catch {
-                        // ignore close errors, abort will handle cleanup.
-                    }
+                    await closeWriter();
                     return { blob: null, size: writtenBytes, savedToFile: true, cleanup: null };
                 },
                 async abort() {
@@ -1493,8 +1489,21 @@ export default class GoogleCryptoApi {
             session.hash = hashCtx;
         }
         const digestSize = requiresDigest ? this.hashByteLength : 0;
-        const ivSize = usesStreaming ? this.ivByteLength : 0;
-        const cache = this.createDownloadCacheWriter({ fileHandle });
+        // For rclone we still need to read the 32-byte header (magic + base nonce) up front.
+        const ivSize =
+            usesStreaming && session.mode === CRYPTO_MODE_RCLONE
+                ? RCLONE_IV_BYTE_LENGTH
+                : usesStreaming
+                ? this.ivByteLength
+                : 0;
+        const cache = this.createDownloadCacheWriter({
+            fileHandle,
+            debugContext: {
+                id: restOptions.id,
+                name: restOptions.name || metaForSession.name,
+                mode: session.mode,
+            },
+        });
         const digestBuffer = requiresDigest ? new Uint8Array(digestSize) : null;
         let digestOffset = 0;
         let totalBytes = 0;
@@ -1513,11 +1522,16 @@ export default class GoogleCryptoApi {
                         const rcloneBlockPlain = 64 * 1024;
                         const rcloneBlockCipherMax = rcloneBlockPlain + 16;
                         const isRclone = session.mode === CRYPTO_MODE_RCLONE;
-                        if (isRclone && typeof session.decryption.blockIndex !== "number") {
-                            session.decryption.blockIndex = 0;
-                        }
-                        if (isRclone && !session.decryption.cipherBuffer) {
-                            session.decryption.cipherBuffer = new Uint8Array(0);
+                        if (isRclone) {
+                            if (typeof session.decryption.blockIndex !== "number") {
+                                session.decryption.blockIndex = 0;
+                            }
+                            if (!session.decryption.cipherBuffer) {
+                                session.decryption.cipherBuffer = new Uint8Array(0);
+                            }
+                            if (typeof session.decryption.cipherConsumed !== "number") {
+                                session.decryption.cipherConsumed = 0;
+                            }
                         }
                         const concatBuffers = (a, b) => {
                             if (!a || a.byteLength === 0) return b.slice();
@@ -1546,32 +1560,39 @@ export default class GoogleCryptoApi {
                             }
                         }
                         if (isRclone) {
-                            // Accumulate full cipher block (64KiB + 16 tag) before decrypting.
+                            // Accumulate cipher data and process per-block (64KiB + 16 tag) as soon as available.
+                            const incoming = encryptedChunk.subarray(cursor);
                             const buffered =
                                 session.decryption.cipherBuffer && session.decryption.cipherBuffer.byteLength
-                                    ? concatBuffers(session.decryption.cipherBuffer, encryptedChunk.subarray(cursor))
-                                    : encryptedChunk.subarray(cursor).slice();
+                                    ? concatBuffers(session.decryption.cipherBuffer, incoming)
+                                    : incoming.slice();
                             session.decryption.cipherBuffer = buffered;
                             cursor = encryptedChunk.byteLength; // consumed whole chunk into buffer
                             while (true) {
-                                const blockIdx = session.decryption.blockIndex || 0;
-                                const blockOffset = blockIdx * rcloneBlockPlain;
-                                const contentRemaining = contentSize - blockOffset;
-                                if (contentRemaining <= 0) break;
-                                const plainLen = Math.min(rcloneBlockPlain, contentRemaining);
+                                const consumed = session.decryption.cipherConsumed || 0;
+                                const remainingCipher = contentSize - consumed;
+                                if (remainingCipher <= 0) break;
+                                const available = session.decryption.cipherBuffer.byteLength;
+                                if (available <= 16) break;
+                                const plainLen = Math.min(rcloneBlockPlain, Math.max(0, remainingCipher - 16));
                                 const cipherLen = plainLen + 16;
-                                if (session.decryption.cipherBuffer.byteLength < cipherLen) break;
+                                if (plainLen <= 0 || available < cipherLen) break;
+                                const blockIdx = session.decryption.blockIndex || 0;
                                 const blockSlice = session.decryption.cipherBuffer.subarray(0, cipherLen);
                                 const decryptedBlock = decryptModeBlock({
                                     mode: session.mode,
                                     context: session.decryption,
                                     chunk: blockSlice,
-                                    offset: blockOffset,
+                                    offset: blockIdx * rcloneBlockPlain,
                                 });
-                                await cache.write(decryptedBlock);
+                                await cache.write(decryptedBlock.subarray(0, plainLen));
+                                const prevDecoded = session.decryption.bytesDecrypted || 0;
+                                const nextDecoded = prevDecoded + plainLen;
+                                session.decryption.bytesDecrypted = nextDecoded;
                                 session.decryption.blockIndex = blockIdx + 1;
+                                session.decryption.cipherConsumed = consumed + cipherLen;
                                 session.decryption.cipherBuffer =
-                                    cipherLen === session.decryption.cipherBuffer.byteLength
+                                    cipherLen === available
                                         ? new Uint8Array(0)
                                         : session.decryption.cipherBuffer.subarray(cipherLen).slice();
                                 absoluteOffset += cipherLen;
@@ -1645,24 +1666,33 @@ export default class GoogleCryptoApi {
         }
         // Flush pending rclone buffered block if any
         if (session.mode === CRYPTO_MODE_RCLONE && session.decryption?.cipherBuffer?.byteLength) {
-            const rcloneBlockPlain = 64 * 1024;
             const pending = session.decryption.cipherBuffer;
-            if (pending.byteLength < 16) {
-                throw new Error("Rclone pending buffer too short to contain tag");
+            while (pending.byteLength >= 16) {
+                const consumed = session.decryption.cipherConsumed || 0;
+                const remainingCipher = contentSize - consumed;
+                if (remainingCipher <= 0) break;
+                const plainLen = Math.min(64 * 1024, Math.max(0, remainingCipher - 16));
+                const cipherLen = plainLen + 16;
+                if (plainLen <= 0 || pending.byteLength < cipherLen) break;
+                const blockIdx = session.decryption.blockIndex || 0;
+                const blockSlice = pending.subarray(0, cipherLen);
+                const decryptedBlock = decryptModeBlock({
+                    mode: session.mode,
+                    context: session.decryption,
+                    chunk: blockSlice,
+                    offset: blockIdx * 64 * 1024,
+                });
+                if (decryptedBlock && decryptedBlock.byteLength) {
+                    await cache.write(decryptedBlock.subarray(0, plainLen));
+                    const prevDecoded = session.decryption.bytesDecrypted || 0;
+                    const nextDecoded = prevDecoded + plainLen;
+                    session.decryption.bytesDecrypted = nextDecoded;
+                }
+                session.decryption.blockIndex = blockIdx + 1;
+                session.decryption.cipherConsumed = consumed + cipherLen;
+                session.decryption.cipherBuffer =
+                    cipherLen === pending.byteLength ? new Uint8Array(0) : pending.subarray(cipherLen).slice();
             }
-            const plainLen = pending.byteLength - 16;
-            const blockOffset = (session.decryption.blockIndex || 0) * rcloneBlockPlain;
-            const decryptedBlock = decryptModeBlock({
-                mode: session.mode,
-                context: session.decryption,
-                chunk: pending,
-                offset: blockOffset,
-            });
-            if (decryptedBlock && decryptedBlock.byteLength) {
-                await cache.write(decryptedBlock.subarray(0, plainLen));
-            }
-            session.decryption.blockIndex = (session.decryption.blockIndex || 0) + 1;
-            session.decryption.cipherBuffer = new Uint8Array(0);
         }
         let calculatedDigest = null;
         if (requiresDigest && digestBuffer && hashCtx) {

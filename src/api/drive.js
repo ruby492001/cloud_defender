@@ -159,6 +159,9 @@ export class DriveApi {
         }
 
         const pending = new Map();
+        const HIGH_WATER_BYTES = 200 * 1024 * 1024;
+        const LOW_WATER_BYTES = 100 * 1024 * 1024;
+        let pendingBytes = 0;
         let nextOffset = 0;
         let draining = false;
         const orderedBuffers = [];
@@ -170,6 +173,7 @@ export class DriveApi {
                 while (pending.has(nextOffset)) {
                     const buf = pending.get(nextOffset);
                     pending.delete(nextOffset);
+                    pendingBytes -= buf.byteLength;
                     const chunkEnd = nextOffset + buf.byteLength;
                     if (onChunk) {
                         await onChunk(buf, { offset: nextOffset, end: chunkEnd, total: fileSize });
@@ -189,6 +193,14 @@ export class DriveApi {
             while (inflight.size >= effectiveConcurrency) {
                 await Promise.race(inflight);
             }
+            while (pendingBytes > HIGH_WATER_BYTES) {
+                await drain();
+                if (pendingBytes > LOW_WATER_BYTES && inflight.size > 0) {
+                    await Promise.race(inflight);
+                } else {
+                    break;
+                }
+            }
             const task = (async () => {
                 if (signal?.aborted) throw new DOMException("aborted", "AbortError");
                 const res = await fetch(`${DRIVE_BASE}/files/${id}?alt=media`, {
@@ -198,6 +210,7 @@ export class DriveApi {
                 if (!(res.ok || res.status === 206)) throw new Error(`Read error: ${res.status}`);
                 const buf = new Uint8Array(await res.arrayBuffer());
                 pending.set(range.start, buf);
+                pendingBytes += buf.byteLength;
                 await drain();
             })();
             inflight.add(task);
