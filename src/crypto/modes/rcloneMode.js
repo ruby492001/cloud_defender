@@ -557,7 +557,6 @@ export function decryptFileName(
     if (isDirectory && directoryNameEncryption === false) {
         return name;
     }
-    const looksBase32 = (seg) => /^[A-Z2-7]+=*$/i.test(seg);
     const context = {
         nameKey: keyBytes.subarray(32, 64),
         nameTweak: keyBytes.subarray(64, 80),
@@ -574,12 +573,12 @@ export function decryptFileName(
         // For "standard" names rclone appends ".bin" to encrypted names; strip before decoding.
         const hasSuffix = mode === "standard" && originalSeg.endsWith(ENCRYPTED_SUFFIX);
         const seg = hasSuffix ? originalSeg.slice(0, -ENCRYPTED_SUFFIX.length) : originalSeg;
-        if (mode === "standard" && !looksBase32(seg)) {
-            // Not an encrypted/encoded segment; return plain (restore suffix removal).
+        try {
+            segments[i] = decryptSegment(seg, context);
+        } catch (err) {
+            // If decoding fails (e.g., plaintext name), fall back to the visible segment.
             segments[i] = hasSuffix ? seg : originalSeg;
-            continue;
         }
-        segments[i] = decryptSegment(seg, context);
     }
     return segments.join("/");
 }
