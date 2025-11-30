@@ -173,7 +173,16 @@ export function calculateEncryptedSize({ mode, skipCrypto, originalSize, ivByteL
     return size;
 }
 
-export function encryptFileName({ mode, name, keyBytes, encryptionAlgorithm, isExcludedName }) {
+export function encryptFileName({
+    mode,
+    name,
+    keyBytes,
+    encryptionAlgorithm,
+    isExcludedName,
+    filenameEncryption,
+    directoryNameEncryption,
+    isDirectory = false,
+}) {
     if (!name) {
         return name;
     }
@@ -185,12 +194,28 @@ export function encryptFileName({ mode, name, keyBytes, encryptionAlgorithm, isE
     }
     const impl = getImplementation(mode);
     if (typeof impl.encryptFileName === "function") {
-        return impl.encryptFileName(name, { keyBytes, encryptionAlgorithm, mode });
+        return impl.encryptFileName(name, {
+            keyBytes,
+            encryptionAlgorithm,
+            mode,
+            filenameEncryption,
+            directoryNameEncryption,
+            isDirectory,
+        });
     }
     return name;
 }
 
-export function decryptFileName({ mode, name, keyBytes, encryptionAlgorithm, isExcludedName }) {
+export function decryptFileName({
+    mode,
+    name,
+    keyBytes,
+    encryptionAlgorithm,
+    isExcludedName,
+    filenameEncryption,
+    directoryNameEncryption,
+    isDirectory = false,
+}) {
     if (!name) {
         return name;
     }
@@ -202,7 +227,15 @@ export function decryptFileName({ mode, name, keyBytes, encryptionAlgorithm, isE
     }
     const impl = getImplementation(mode);
     if (typeof impl.decryptFileName === "function") {
-        return impl.decryptFileName(name, { keyBytes, encryptionAlgorithm, mode, isExcludedName });
+        return impl.decryptFileName(name, {
+            keyBytes,
+            encryptionAlgorithm,
+            mode,
+            isExcludedName,
+            filenameEncryption,
+            directoryNameEncryption,
+            isDirectory,
+        });
     }
     return name;
 }

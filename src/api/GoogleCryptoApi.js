@@ -42,12 +42,23 @@ import {
 
 import { deriveKeyBytes } from "../crypto/pbkdf2.js";
 import { hexToBytes, bytesToHex, concatBytes, utf8ToBytes, bytesToUtf8 } from "../utils/byteUtils.js";
+import { scrypt as wasmScrypt } from "hash-wasm";
+import AES from "aes-js";
 
 const DEFAULT_BLOCK_SIZE = 4 * 1024 * 1024; // 4MB
 const DEFAULT_HASH_BYTES = 64; // SHA-512 digest length placeholder
 const IV_BYTE_LENGTH = 16;
 const CRYPTO_MODE_RCLONE = "rclone";
 const CRYPTO_MODE_OWN = "own";
+const RCLONE_IV_BYTE_LENGTH = 32;
+const RCLONE_KEY_MATERIAL_LENGTH = 80;
+const RCLONE_DEFAULT_SALT = new Uint8Array([
+    0xa8, 0x0d, 0xf4, 0x3a, 0x8f, 0xbd, 0x03, 0x08, 0xa7, 0xca, 0xb8, 0x3e, 0x58, 0x1f, 0x86, 0xb1,
+]);
+const RCLONE_OBSCURE_KEY = Uint8Array.from([
+    0x9c, 0x93, 0x5b, 0x48, 0x73, 0x0a, 0x55, 0x4d, 0x6b, 0xfd, 0x7c, 0x63, 0xc8, 0x86, 0xa9, 0x2b, 0xd3, 0x90, 0x19,
+    0x8e, 0xb8, 0x12, 0x8a, 0xfb, 0xf4, 0xde, 0x16, 0x2b, 0x8b, 0x95, 0xf6, 0x38,
+]);
 const INTEGRITY_ERROR_CODE = "INTEGRITY_ERROR";
 const INTEGRITY_ERROR_MESSAGE = "Data integrity corrupted";
 const PBKDF2_HASH_ALGORITHM = "SHA-256";
@@ -108,19 +119,18 @@ export default class GoogleCryptoApi {
                     }
                     this.currentConfig = nextConfig;
                     this.cryptoMode = this.normalizeCryptoMode(nextConfig.mode || nextConfig.algorithm);
+                    this.ivByteLength =
+                        this.cryptoMode === CRYPTO_MODE_RCLONE ? RCLONE_IV_BYTE_LENGTH : IV_BYTE_LENGTH;
                     this._cachedKeyBytes = null;
                     return nextConfig;
                 })
                 .catch((err) => {
-                    if (err && err.message === "Password input cancelled") {
-                        this._configPromise = null;
-                        throw err;
-                    }
-                    console.warn("GoogleCryptoApi: failed to load crypto config", err);
-                    this.currentConfig = { encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM };
+                    this._configPromise = null;
+                    this.currentConfig = {};
                     this.cryptoMode = CRYPTO_MODE_OWN;
+                    this.ivByteLength = IV_BYTE_LENGTH;
                     this._cachedKeyBytes = null;
-                    return {};
+                    throw err;
                 });
         }
         return this._configPromise;
@@ -421,35 +431,36 @@ export default class GoogleCryptoApi {
                 continue;
             }
             try {
-                const primary = await this.decryptSecretPayload({
+                const primarySecret = await this.decryptSecretPayload({
                     encryptedHex: encryptedPrimary,
                     password: trimmedPassword,
                     encryptionAlgorithm: algorithm,
                     pbkdf2Iterations: iterations,
                     pbkdf2Hash: hash,
                 });
-                const secondary = await this.decryptSecretPayload({
+                const secondarySecret = await this.decryptSecretPayload({
                     encryptedHex: encryptedSecondary,
                     password: trimmedPassword,
                     encryptionAlgorithm: algorithm,
                     pbkdf2Iterations: iterations,
                     pbkdf2Hash: hash,
                 });
-                const combinedKey = await this.deriveRcloneContentKey(primary, secondary, algorithm);
+                const keyMaterial = await this.deriveRcloneKeyMaterial(primarySecret, secondarySecret);
                 const unlockedConfig = {
                     ...config,
                     mode: CRYPTO_MODE_RCLONE,
                     filenameEncryption: normalizedFilenameEncryption,
                     directoryNameEncryption: normalizedDirectoryEncryption,
-                    encryptionAlgorithm: algorithm,
-                    pbkdf2Iterations: iterations,
-                    pbkdf2Hash: hash,
-                    key: combinedKey.toLowerCase(),
-                    rclonePassword: primary,
-                    rclonePassword2: secondary,
+                    encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+                    pbkdf2Iterations: PBKDF2_ITERATIONS,
+                    pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
+                    key: bytesToHex(keyMaterial).toLowerCase(),
+                    rclonePassword: primarySecret,
+                    rclonePassword2: secondarySecret,
                 };
                 this.currentConfig = unlockedConfig;
                 this.cryptoMode = CRYPTO_MODE_RCLONE;
+                this.ivByteLength = RCLONE_IV_BYTE_LENGTH;
                 this._cachedKeyBytes = null;
                 return unlockedConfig;
             } catch (err) {
@@ -584,17 +595,38 @@ export default class GoogleCryptoApi {
         }
         return plain.slice(0, -CONTROL_PHRASE.length);
     }
-    async deriveRcloneContentKey(primary, secondary, encryptionAlgorithm = DEFAULT_ENCRYPTION_ALGORITHM) {
-        const combined = `${primary}:${secondary}`;
-        const normalizedAlgorithm = normalizeAlgorithmName(encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
-        const derived = await deriveKeyBytes({
-            password: combined,
-            salt: utf8ToBytes("rclone-derived-key"),
-            iterations: PBKDF2_ITERATIONS,
-            hash: PBKDF2_HASH_ALGORITHM,
-            length: keyLengthForAlgorithm(normalizedAlgorithm),
+    async deriveRcloneKeyMaterial(primary, secondary) {
+        const salt = secondary && secondary.trim() ? utf8ToBytes(secondary.trim()) : RCLONE_DEFAULT_SALT;
+        const derived = await wasmScrypt({
+            password: primary || "",
+            salt,
+            costFactor: 16384,
+            blockSize: 8,
+            parallelism: 1,
+            hashLength: RCLONE_KEY_MATERIAL_LENGTH,
+            outputType: "binary",
         });
-        return bytesToHex(derived);
+        return derived instanceof Uint8Array ? derived : new Uint8Array(derived);
+    }
+    async revealRcloneSecret(secret) {
+        const trimmed = typeof secret === "string" ? secret.trim() : "";
+        if (!trimmed) return "";
+        try {
+            const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+            const pad = normalized.length % 4 === 0 ? "" : "=".repeat(4 - (normalized.length % 4));
+            const b64 = normalized + pad;
+            const raw = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+            if (raw.length <= 16) {
+                return trimmed;
+            }
+            const iv = raw.subarray(0, 16);
+            const payload = raw.subarray(16);
+            const aesCtr = new AES.ModeOfOperation.ctr(RCLONE_OBSCURE_KEY, new AES.Counter(iv));
+            const decrypted = aesCtr.decrypt(payload);
+            return new TextDecoder().decode(decrypted);
+        } catch {
+            return trimmed;
+        }
     }
     async configureCrypto(options = {}) {
         const normalizedMode = this.normalizeCryptoMode(options.mode ?? DEFAULT_MODE);
@@ -650,6 +682,7 @@ export default class GoogleCryptoApi {
         this._keyFileId = keyMeta?.id ?? this._keyFileId;
         this.currentConfig = { ...normalized, key: fileKeyHex.toLowerCase() };
         this.cryptoMode = this.normalizeCryptoMode(normalized.mode);
+        this.ivByteLength = IV_BYTE_LENGTH;
         this._cachedKeyBytes = null;
         this._configPromise = Promise.resolve(this.currentConfig);
         return this.currentConfig;
@@ -672,23 +705,16 @@ export default class GoogleCryptoApi {
         if (!basePassword) {
             throw new Error("Password is required to configure crypto");
         }
-        const primarySecret = typeof options.rclonePassword === "string" ? options.rclonePassword.trim() : "";
-        const secondarySecret = typeof options.rclonePassword2 === "string" ? options.rclonePassword2.trim() : "";
+        const primaryRaw = typeof options.rclonePassword === "string" ? options.rclonePassword.trim() : "";
+        const secondaryRaw = typeof options.rclonePassword2 === "string" ? options.rclonePassword2.trim() : "";
+        const primarySecret = await this.revealRcloneSecret(primaryRaw);
+        const secondarySecret = await this.revealRcloneSecret(secondaryRaw);
         if (!primarySecret || !secondarySecret) {
             throw new Error("Both rclone passwords are required");
         }
         const normalized = {
             mode: CRYPTO_MODE_RCLONE,
-            hashAlgorithm:
-                typeof options.hashAlgorithm === "string" && options.hashAlgorithm.trim()
-                    ? options.hashAlgorithm.trim().toUpperCase()
-                    : DEFAULT_HASH_ALGORITHM,
-            encryptionAlgorithm: normalizeAlgorithmName(
-                options.encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM
-            ),
         };
-        normalized.pbkdf2Iterations = this.pickPbkdf2Iterations(options.pbkdf2Iterations);
-        normalized.pbkdf2Hash = this.pickPbkdf2Hash(options.pbkdf2Hash);
         normalized.filenameEncryption = this.normalizeFilenameEncryptionOption(
             options.filenameEncryption || DEFAULT_FILENAME_ENCRYPTION
         );
@@ -698,22 +724,20 @@ export default class GoogleCryptoApi {
         const primaryPayload = await this.encryptSecretPayload({
             plaintext: primarySecret,
             password: basePassword,
-            encryptionAlgorithm: normalized.encryptionAlgorithm,
-            pbkdf2Iterations: normalized.pbkdf2Iterations,
-            pbkdf2Hash: normalized.pbkdf2Hash,
+            encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+            pbkdf2Iterations: PBKDF2_ITERATIONS,
+            pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
         });
         const secondaryPayload = await this.encryptSecretPayload({
             plaintext: secondarySecret,
             password: basePassword,
-            encryptionAlgorithm: normalized.encryptionAlgorithm,
-            pbkdf2Iterations: normalized.pbkdf2Iterations,
-            pbkdf2Hash: normalized.pbkdf2Hash,
+            encryptionAlgorithm: DEFAULT_ENCRYPTION_ALGORITHM,
+            pbkdf2Iterations: PBKDF2_ITERATIONS,
+            pbkdf2Hash: PBKDF2_HASH_ALGORITHM,
         });
-        const combinedKey = await this.deriveRcloneContentKey(
-            primarySecret,
-            secondarySecret,
-            normalized.encryptionAlgorithm
-        );
+        const keyMaterial = await this.deriveRcloneKeyMaterial(primarySecret, secondarySecret);
+        this._oneTimeUnlockPassword = basePassword;
+        const combinedKey = bytesToHex(keyMaterial);
         const configMeta = await this.createOrUpdateTextFile({
             name: CONFIG_FILE_NAME,
             data: serializeConfig(normalized),
@@ -739,6 +763,7 @@ export default class GoogleCryptoApi {
             rclonePassword2: secondarySecret,
         };
         this.cryptoMode = CRYPTO_MODE_RCLONE;
+        this.ivByteLength = RCLONE_IV_BYTE_LENGTH;
         this._cachedKeyBytes = null;
         this._configPromise = Promise.resolve(this.currentConfig);
         return this.currentConfig;
@@ -845,7 +870,7 @@ export default class GoogleCryptoApi {
         if (!name) return false;
         return EXCLUDED_FILE_NAMES.includes(name);
     }
-    encryptFileName(name) {
+    encryptFileName(name, options = {}) {
         if (!name) return name;
         if (this.isExcludedName(name)) {
             return name;
@@ -858,22 +883,47 @@ export default class GoogleCryptoApi {
             keyBytes,
             encryptionAlgorithm: this.getEncryptionAlgorithm(normalizedMode),
             isExcludedName: (value) => this.isExcludedName(value),
+            filenameEncryption: this.currentConfig?.filenameEncryption,
+            directoryNameEncryption: this.currentConfig?.directoryNameEncryption,
+            isDirectory: options.isDirectory ?? false,
         });
     }
-    decryptFileName(name) {
+    decryptFileName(name, options = {}) {
         if (!name) return name;
         if (this.isExcludedName(name)) {
             return name;
         }
         const normalizedMode = this.normalizeCryptoMode(this.getCryptoMode());
         const keyBytes = this.getKeyBytes();
-        return decryptModeFileName({
-            mode: normalizedMode,
-            name,
-            keyBytes,
-            encryptionAlgorithm: this.getEncryptionAlgorithm(normalizedMode),
-            isExcludedName: (value) => this.isExcludedName(value),
-        });
+        try {
+            return decryptModeFileName({
+                mode: normalizedMode,
+                name,
+                keyBytes,
+                encryptionAlgorithm: this.getEncryptionAlgorithm(normalizedMode),
+                isExcludedName: (value) => this.isExcludedName(value),
+                filenameEncryption: this.currentConfig?.filenameEncryption,
+                directoryNameEncryption: this.currentConfig?.directoryNameEncryption,
+                isDirectory: options.isDirectory ?? false,
+            });
+        } catch (err) {
+            if (normalizedMode === CRYPTO_MODE_RCLONE && /not an obfusc/i.test(err?.message || "")) {
+                // Name is already plain or not obfuscated; return as-is
+                return name;
+            }
+            console.error(
+                "[Crypto] decryptFileName failed",
+                err?.message || err,
+                {
+                    mode: normalizedMode,
+                    name,
+                    filenameEncryption: this.currentConfig?.filenameEncryption,
+                    directoryNameEncryption: this.currentConfig?.directoryNameEncryption,
+                    isDirectory: options.isDirectory ?? false,
+                }
+            );
+            throw err;
+        }
     }
     createEncryptionContext({ file, mode, skipCrypto }) {
         void file;
@@ -926,6 +976,10 @@ export default class GoogleCryptoApi {
             ? createModeHashContext({ mode, algorithm: hashAlgorithm })
             : null;
         const decryption = this.createDecryptionContext({ meta, mode, skipCrypto });
+        if (mode === CRYPTO_MODE_RCLONE && decryption) {
+            decryption.blockIndex = 0;
+            decryption.cipherBuffer = new Uint8Array(0);
+        }
         return {
             hash: hashContext,
             decryption,
@@ -951,7 +1005,7 @@ export default class GoogleCryptoApi {
     }
     async createFolder(name, parentId) {
         await this.ensureConfigLoaded();
-        const preparedName = this.encryptFileName(name);
+        const preparedName = this.encryptFileName(name, { isDirectory: true });
         const folder = await this.drive.createFolder(preparedName, parentId ?? "root");
         return this.decorateIncomingItem(folder);
     }
@@ -961,10 +1015,10 @@ export default class GoogleCryptoApi {
     }
     async renameFile(id, newName, options = {}) {
         await this.ensureConfigLoaded();
-        const { encrypted = false } = options || {};
-        const finalName = encrypted ? newName : this.encryptFileName(newName);
+        const { encrypted = false, isDirectory = false } = options || {};
+        const finalName = encrypted ? newName : this.encryptFileName(newName, { isDirectory });
         const res = await this.drive.renameFile(id, finalName);
-        return this.decorateIncomingItem({ ...res, name: finalName });
+        return this.decorateIncomingItem({ ...res, name: finalName, mimeType: options?.mimeType });
     }
     async moveFile(id, newParentId, oldParentId) {
         await this.ensureConfigLoaded();
@@ -973,7 +1027,7 @@ export default class GoogleCryptoApi {
     }
     async copyFile(id, name, newParentId) {
         await this.ensureConfigLoaded();
-        const encryptedName = this.encryptFileName(name);
+        const encryptedName = this.encryptFileName(name, { isDirectory: false });
         const res = await this.drive.copyFile(id, encryptedName, newParentId);
         return this.decorateIncomingItem(res);
     }
@@ -987,13 +1041,15 @@ export default class GoogleCryptoApi {
                 // Place to cache per-file encryption metadata (keys IVs etc.)
                 metadata: {},
             };
-        const plainName = this.decryptFileName(item.name);
+        const isDir = item?.mimeType === "application/vnd.google-apps.folder";
+        const plainName = this.decryptFileName(item.name, { isDirectory: isDir });
         if (this.isExcludedName(plainName)) {
             return null;
         }
         return {
             ...item,
             name: plainName,
+            encryptedName: item.name,
             cryptoContext,
         };
     }
@@ -1164,8 +1220,10 @@ export default class GoogleCryptoApi {
         let serverConfirmed = 0;
         let lastResponse = null;
         const normalizedParallel = Math.max(1, Number(parallel) || 1);
-        const normalizedChunkSize = chunkSize && chunkSize > 0 ? chunkSize : this.blockSize;
-        const chunkStride = Math.max(this.blockSize, normalizedChunkSize);
+        const rcloneBlockSize = 64 * 1024;
+        const effectiveBlockSize = uploadSession.mode === CRYPTO_MODE_RCLONE ? rcloneBlockSize : this.blockSize;
+        const normalizedChunkSize = chunkSize && chunkSize > 0 ? chunkSize : effectiveBlockSize;
+        const chunkStride = Math.max(effectiveBlockSize, normalizedChunkSize);
         const inflight = new Set();
         let errored = null;
         const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1295,9 +1353,9 @@ export default class GoogleCryptoApi {
                 await scheduleChunk(chunk, length, forceAwait);
             }
         };
-        for (let offset = 0; offset < file.size; offset += this.blockSize) {
+        for (let offset = 0; offset < file.size; offset += effectiveBlockSize) {
             if (signal?.aborted) throw new DOMException("Upload aborted", "AbortError");
-            const slice = file.slice(offset, Math.min(offset + this.blockSize, file.size));
+            const slice = file.slice(offset, Math.min(offset + effectiveBlockSize, file.size));
             const plainChunk = new Uint8Array(await slice.arrayBuffer());
             if (requiresDigest && hashCtx) {
                 updateModeHash({
@@ -1385,10 +1443,10 @@ export default class GoogleCryptoApi {
     async downloadInChunks(options = {}) {
         await this.ensureConfigLoaded();
         const normalizedOptions = options || {};
-        const { session: providedSession, fileHandle, ...restOptions } = normalizedOptions;
+        const { session: providedSession, fileHandle, encryptedName, ...restOptions } = normalizedOptions;
         const metaForSession = {
             id: restOptions.id,
-            name: restOptions.name,
+            name: encryptedName || restOptions.name,
             size: restOptions.size,
         };
         const session = providedSession ?? this.createDownloadSession(metaForSession);
@@ -1432,14 +1490,32 @@ export default class GoogleCryptoApi {
                 onChunk: async (encryptedChunk, meta) => {
                     const { offset, total } = meta;
                     totalBytes = total;
-                    const contentSize = Math.max(0, total - digestSize);
+                    const contentSize = Math.max(0, total - digestSize - ivSize);
                     let absoluteOffset = offset;
                     let cursor = 0;
-                    while (cursor < encryptedChunk.byteLength) {
-                        if (usesStreaming && ivBytesRead < ivSize) {
-                            const remainingIv = ivSize - ivBytesRead;
-                            const take = Math.min(remainingIv, encryptedChunk.byteLength - cursor);
-                            if (take > 0) {
+                    try {
+                        const rcloneBlockPlain = 64 * 1024;
+                        const rcloneBlockCipherMax = rcloneBlockPlain + 16;
+                        const isRclone = session.mode === CRYPTO_MODE_RCLONE;
+                        if (isRclone && typeof session.decryption.blockIndex !== "number") {
+                            session.decryption.blockIndex = 0;
+                        }
+                        if (isRclone && !session.decryption.cipherBuffer) {
+                            session.decryption.cipherBuffer = new Uint8Array(0);
+                        }
+                        const concatBuffers = (a, b) => {
+                            if (!a || a.byteLength === 0) return b.slice();
+                            if (!b || b.byteLength === 0) return a.slice();
+                            const out = new Uint8Array(a.byteLength + b.byteLength);
+                            out.set(a, 0);
+                            out.set(b, a.byteLength);
+                            return out;
+                        };
+                        while (cursor < encryptedChunk.byteLength) {
+                            if (usesStreaming && ivBytesRead < ivSize) {
+                                const remainingIv = ivSize - ivBytesRead;
+                                const take = Math.min(remainingIv, encryptedChunk.byteLength - cursor);
+                                if (take > 0) {
                                 const ivSlice = encryptedChunk.subarray(cursor, cursor + take);
                                 if (session.decryption?.iv) {
                                     session.decryption.iv.set(ivSlice, ivBytesRead);
@@ -1453,11 +1529,46 @@ export default class GoogleCryptoApi {
                                 continue;
                             }
                         }
+                        if (isRclone) {
+                            // Accumulate full cipher block (64KiB + 16 tag) before decrypting.
+                            const buffered =
+                                session.decryption.cipherBuffer && session.decryption.cipherBuffer.byteLength
+                                    ? concatBuffers(session.decryption.cipherBuffer, encryptedChunk.subarray(cursor))
+                                    : encryptedChunk.subarray(cursor).slice();
+                            session.decryption.cipherBuffer = buffered;
+                            cursor = encryptedChunk.byteLength; // consumed whole chunk into buffer
+                            while (true) {
+                                const blockIdx = session.decryption.blockIndex || 0;
+                                const blockOffset = blockIdx * rcloneBlockPlain;
+                                const contentRemaining = contentSize - blockOffset;
+                                if (contentRemaining <= 0) break;
+                                const plainLen = Math.min(rcloneBlockPlain, contentRemaining);
+                                const cipherLen = plainLen + 16;
+                                if (session.decryption.cipherBuffer.byteLength < cipherLen) break;
+                                const blockSlice = session.decryption.cipherBuffer.subarray(0, cipherLen);
+                                const decryptedBlock = decryptModeBlock({
+                                    mode: session.mode,
+                                    context: session.decryption,
+                                    chunk: blockSlice,
+                                    offset: blockOffset,
+                                });
+                                await cache.write(decryptedBlock);
+                                session.decryption.blockIndex = blockIdx + 1;
+                                session.decryption.cipherBuffer =
+                                    cipherLen === session.decryption.cipherBuffer.byteLength
+                                        ? new Uint8Array(0)
+                                        : session.decryption.cipherBuffer.subarray(cipherLen).slice();
+                                absoluteOffset += cipherLen;
+                            }
+                            continue;
+                        }
                         if (requiresDigest && absoluteOffset >= contentSize) {
                             const digestSlice = encryptedChunk.subarray(cursor);
                             const remainingDigest = Math.max(0, digestSize - digestOffset);
                             const copySlice =
-                                remainingDigest < digestSlice.length ? digestSlice.subarray(0, remainingDigest) : digestSlice;
+                                remainingDigest < digestSlice.length
+                                    ? digestSlice.subarray(0, remainingDigest)
+                                    : digestSlice;
                             if (copySlice.length > 0 && digestBuffer) {
                                 digestBuffer.set(copySlice, digestOffset);
                                 digestOffset += copySlice.length;
@@ -1465,16 +1576,20 @@ export default class GoogleCryptoApi {
                             break;
                         }
                         const remainingContent = contentSize - absoluteOffset;
-                        const blockLength = Math.min(this.blockSize, remainingContent, encryptedChunk.byteLength - cursor);
+                        const blockLength = Math.min(
+                            this.blockSize,
+                            remainingContent,
+                            encryptedChunk.byteLength - cursor
+                        );
                         const blockSlice = encryptedChunk.subarray(cursor, cursor + blockLength);
                         const contentOffset = Math.max(0, absoluteOffset - ivSize);
                         const decryptedBlock = usesStreaming
                             ? decryptModeBlock({
-                                mode: session.mode,
-                                context: session.decryption,
-                                chunk: blockSlice,
-                                offset: contentOffset,
-                            })
+                                  mode: session.mode,
+                                  context: session.decryption,
+                                  chunk: blockSlice,
+                                  offset: contentOffset,
+                              })
                             : blockSlice;
                         if (requiresDigest && hashCtx) {
                             updateModeHash({
@@ -1487,6 +1602,20 @@ export default class GoogleCryptoApi {
                         cursor += blockLength;
                         absoluteOffset += blockLength;
                     }
+                    } catch (err) {
+                        console.error("[DownloadChunk] decrypt failed", {
+                            offset,
+                            total,
+                            absoluteOffset,
+                            ivBytesRead,
+                            ivSize,
+                            digestOffset,
+                            digestSize,
+                            chunkLength: encryptedChunk?.byteLength,
+                            mode: session.mode,
+                        });
+                        throw err;
+                    }
                 },
             });
         } catch (err) {
@@ -1497,6 +1626,27 @@ export default class GoogleCryptoApi {
         }
         if (session.decryption) {
             session.decryption.ivBytesRead = ivBytesRead;
+        }
+        // Flush pending rclone buffered block if any
+        if (session.mode === CRYPTO_MODE_RCLONE && session.decryption?.cipherBuffer?.byteLength) {
+            const rcloneBlockPlain = 64 * 1024;
+            const pending = session.decryption.cipherBuffer;
+            if (pending.byteLength < 16) {
+                throw new Error("Rclone pending buffer too short to contain tag");
+            }
+            const plainLen = pending.byteLength - 16;
+            const blockOffset = (session.decryption.blockIndex || 0) * rcloneBlockPlain;
+            const decryptedBlock = decryptModeBlock({
+                mode: session.mode,
+                context: session.decryption,
+                chunk: pending,
+                offset: blockOffset,
+            });
+            if (decryptedBlock && decryptedBlock.byteLength) {
+                await cache.write(decryptedBlock.subarray(0, plainLen));
+            }
+            session.decryption.blockIndex = (session.decryption.blockIndex || 0) + 1;
+            session.decryption.cipherBuffer = new Uint8Array(0);
         }
         let calculatedDigest = null;
         if (requiresDigest && digestBuffer && hashCtx) {
@@ -1522,7 +1672,12 @@ export default class GoogleCryptoApi {
             await cache.write(finalDecryptedChunk);
         }
         const finalized = await cache.finalize(restOptions.type || "application/octet-stream");
-        const finalName = this.decryptFileName(result?.name ?? restOptions.name ?? "");
+        const encryptedNameResolved = result?.encryptedName ?? restOptions.encryptedName ?? null;
+        const decryptedFromCrypto =
+            session.mode === CRYPTO_MODE_RCLONE && encryptedNameResolved
+                ? this.decryptFileName(encryptedNameResolved)
+                : null;
+        const finalName = restOptions.name || decryptedFromCrypto || encryptedNameResolved || result?.name || "";
         return {
             blob: finalized?.blob ?? null,
             name: finalName,

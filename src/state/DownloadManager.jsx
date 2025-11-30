@@ -133,6 +133,7 @@ export function DownloadProvider({ api, children }){
         const { blob, name, session, savedToFile, cleanup, asBlob } = await api.downloadInChunks({
             id: task.fileId,
             name: task.name,
+            encryptedName: task.encryptedName,
             size: task.size ?? undefined,
             session: task.crypto?.downloadSession,
             signal,
@@ -205,7 +206,7 @@ export function DownloadProvider({ api, children }){
         for(const f of files){
             if(signal?.aborted) throw new DOMException('aborted','AbortError')
             const { blob, size, cleanup, asBlob, opfsHandle } = await api.downloadInChunks({
-                id: f.id, name: f.name, size: f.size ?? undefined, signal,
+                id: f.id, name: f.name, encryptedName: f.encryptedName || f.name, size: f.size ?? undefined, signal,
                 concurrency: chunkConcurrency,
                 onProgress: (loaded, total)=>{
                     const base = totalBytesKnown
@@ -271,13 +272,15 @@ export function DownloadProvider({ api, children }){
                 }
             }
        	setDockVisible(true)
-            const baseMeta = { id: file.id, name: file.name, size: file.size }
+            const encryptedName = file.encryptedName || file.name
+            const baseMeta = { id: file.id, name: encryptedName, size: file.size }
             const downloadSession = (file?.cryptoContext?.downloadSession) || (api.createDownloadSession ? api.createDownloadSession(baseMeta) : null)
             setTasks(ts => {
                 const task = {
                     id: newTaskId(),
                     fileId: file.id,
                     name: file.name,
+                    encryptedName: file.encryptedName || file.name,
                     size: file.size? Number(file.size): undefined,
                     progress: 0,
                     status: 'queued',
