@@ -1019,6 +1019,13 @@ export default class GoogleCryptoApi {
             .filter(Boolean);
         return { ...result, files };
     }
+    async listOnlyFolders(folderId, pageToken, search) {
+        const res = await this.listFolder(folderId, pageToken, search);
+        const onlyFolders = (res.files || []).filter(
+            (it) => it?.mimeType === "application/vnd.google-apps.folder"
+        );
+        return { ...res, files: onlyFolders };
+    }
     async createFolder(name, parentId) {
         await this.ensureConfigLoaded();
         const preparedName = this.encryptFileName(name, { isDirectory: true });

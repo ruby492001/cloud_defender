@@ -9,6 +9,7 @@ import {
     resolveParentIdForFile,
 } from "../utils/tree";
 import { useBusy } from "./BusyOverlay.jsx";
+import { useDialog } from "../state/DialogProvider.jsx";
 
 const FolderUploader = forwardRef(function FolderUploader(
     { api, uploadManager, className = "", showButton = true },
@@ -16,6 +17,7 @@ const FolderUploader = forwardRef(function FolderUploader(
 ) {
     const inputRef = useRef(null);
     const busy = useBusy();
+    const { confirm } = useDialog();
 
     useEffect(() => {
         const el = inputRef.current;
@@ -40,7 +42,12 @@ const FolderUploader = forwardRef(function FolderUploader(
 
         const rootName = getSelectionRootFolderName(files);
         if (!rootName) {
-            alert("Unable to detect the root folder. Chromium requires the directory picker flag in Firefox.");
+            await confirm({
+                title: "Не удалось определить корень папки",
+                message: "Браузер не вернул корневую папку. В Firefox нужно включить флаг directory picker.",
+                confirmText: "Понятно",
+                cancelText: "Закрыть",
+            });
             return;
         }
 
@@ -70,7 +77,12 @@ const FolderUploader = forwardRef(function FolderUploader(
             });
         } catch (err) {
             console.error(err);
-            alert(err?.message || "Failed to prepare folder upload");
+            await confirm({
+                title: "Ошибка загрузки папки",
+                message: err?.message || "Failed to prepare folder upload",
+                confirmText: "Закрыть",
+                cancelText: "Отмена",
+            });
         } finally {
             stopBusy();
         }

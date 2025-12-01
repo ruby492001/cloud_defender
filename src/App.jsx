@@ -14,6 +14,7 @@ import {useDrive} from "./hooks/useDrive.js";
 import {DownloadProvider, useDownload} from "./state/DownloadManager.jsx";
 import { BusyProvider, useBusy } from "./components/BusyOverlay.jsx";
 import { PasswordPromptProvider, usePasswordPrompt } from "./state/PasswordPromptProvider.jsx";
+import { DialogProvider, useDialog } from "./state/DialogProvider.jsx";
 import {CryptoSuite} from "./crypto/CryptoSuite.js";
 import createCfbModule from './crypto/wasm/cfb_wasm.js';
 
@@ -35,10 +36,11 @@ function onSuccessLogin(tokenResponse) {
     return false;
 }
 
-const accessToken = "ya29.a0ATi6K2tFnJjjzJsRuXWr4o2GbSjxAoawCF_sIVrJD_KubSC5A3nDuwJ-FxHq-Bs0Wy51WLvQw4OlVHe66JDIPqLXxqGu5r9Rsv83ykYQgXdrMPbUkfQIwpnqaOJXEHn2Rb3so8kcKf8AXRcB2UwhzmP2Oak7r7Pg2skKtpGMyaEY7YditFBeOA9HMzDCrymKc3S5MpPQiAaCgYKAQ0SARUSFQHGX2MiXe1jtDaSQT4-KgcuDDLFWQ0209"
+const accessToken = "ya29.a0ATi6K2u0NJQz-uprTNB0SFP-km-8JdJoGYTmxabBpz_TDSQsPq6bp_EJX2BH-9kXYfCNu9DLJIiB3oEigGMbqp_e4cARhd7f2IN0lMjZzpNZohqdBaOOVJDhWUYAMELX26OPOc9HRNx7YPyhickBxdMTaC5l-HkO6ldedLM-DnuZnFZ5U0JSleMExRmD2hhIbVuezKlVzAaCgYKAV4SARUSFQHGX2MiwtnMl6PQGNsOSa42LdBlNg0209"
 
 function AppContent() {
     const { requestPassword } = usePasswordPrompt();
+    const { prompt, confirm } = useDialog();
     const [creatingStorage, setCreatingStorage] = useState(false);
     const handleStorageInitStart = useCallback(() => setCreatingStorage(true), []);
     const handleStorageInitFinish = useCallback(() => setCreatingStorage(false), []);
@@ -185,7 +187,12 @@ function AppContent() {
         const onListContext = (e)=>{ if(selectedIds.size>0){ e.preventDefault(); setCreateMenu(null); setMenu({ x:e.clientX+window.scrollX, y:e.clientY+window.scrollY, item:null, group:true }) } }
 
         const doRename = async (item)=>{
-            const v = prompt('Rename item', item.name);
+            const v = await prompt({
+                title: "Переименовать",
+                message: "Введите новое имя",
+                defaultValue: item.name,
+                placeholder: "Новое имя",
+            });
             if(v && v.trim()){
                 const trimmed = v.trim()
                 const shouldEncrypt = !(api.isExcludedName?.(trimmed))
@@ -259,7 +266,12 @@ function AppContent() {
         }
 
         const handleCreateFolder = async ()=>{
-            const name = prompt('Folder name')
+            const name = await prompt({
+                title: "Новая папка",
+                message: "Введите имя папки",
+                placeholder: "Имя папки",
+                confirmText: "Создать",
+            })
             const trimmed = name?.trim()
             if(!trimmed) return
             const stopBusy = busy.start?.('create-folder') ?? (()=>{})
@@ -267,7 +279,7 @@ function AppContent() {
                 await api.createFolder(trimmed, currentFolder)
                 await refresh()
             }catch(err){
-                alert(err?.message || 'Failed to create folder')
+                await confirm({ title: "Ошибка", message: err?.message || 'Failed to create folder', confirmText: "OK", cancelText: "Закрыть" })
             } finally {
                 stopBusy()
             }
@@ -306,6 +318,14 @@ function AppContent() {
 
             base.push({ id:'delete', label:'Delete', danger:true, onClick: async ()=>{
                     const ids = menu?.group? [...selectedIds] : [menu?.item?.id]
+                    const count = ids.length
+                    const ok = await confirm({
+                        title: "Удаление",
+                        message: count > 1 ? `Удалить ${count} выбранных элементов?` : `Удалить "${menu?.item?.name}"?`,
+                        confirmText: "Удалить",
+                        cancelText: "Отмена",
+                    })
+                    if(!ok) return
                     const stopBusy = busy.start?.('delete') ?? (()=>{})
                     try{
                         for(const id of ids){
@@ -435,9 +455,11 @@ function AppContent() {
 export default function App() {
     return (
         <PasswordPromptProvider>
-            <BusyProvider>
-                <AppContent />
-            </BusyProvider>
+            <DialogProvider>
+                <BusyProvider>
+                    <AppContent />
+                </BusyProvider>
+            </DialogProvider>
         </PasswordPromptProvider>
     );
 }

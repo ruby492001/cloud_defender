@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
+import { useDialog } from './DialogProvider.jsx'
 
 function computeEtaFromBytes({ startedAt, loaded, total, fallbackTotal }) {
     if (!startedAt) return null;
@@ -42,6 +43,7 @@ export function DownloadProvider({ api, children }){
     const concurrency = 2
     const chunkConcurrency = 4
     const [dockVisible, setDockVisible] = useState(false)
+    const { confirm } = useDialog()
 
     const saveBlobOnce = (taskId, name, blob, afterRevoke)=>{
         if(!blob) return
@@ -201,6 +203,18 @@ export function DownloadProvider({ api, children }){
 
         const totalBytesKnown = files.every(f => !!f.size)
         const totalBytes = totalBytesKnown ? files.reduce((a,f)=> a + Number(f.size||0), 0) : files.length
+        if(totalBytesKnown && totalBytes >= STREAMING_THRESHOLD_BYTES){
+            const ok = await confirm({
+                title: "Большая папка",
+                message: `Папка весит примерно ${(totalBytes/1024/1024).toFixed(1)} МБ. Скачать как архив?`,
+                confirmText: "Скачать",
+                cancelText: "Отмена",
+            })
+            if(!ok){
+                setTasks(ts => ts.map(t => t.id === task.id ? { ...t, status:'canceled', abort: undefined, etaSeconds: null } : t))
+                return
+            }
+        }
         let acc = 0
 
         for(const f of files){
@@ -259,7 +273,17 @@ export function DownloadProvider({ api, children }){
             const kind = file.mimeType === 'application/vnd.google-apps.folder' ? 'folder' : 'file'
             let fileHandle = null
             const fileSize = Number(file.size || 0)
-            const shouldStreamDirect = kind === 'file' && canUseFileSystemSave() && fileSize >= STREAMING_THRESHOLD_BYTES
+            const hasSavePicker = canUseFileSystemSave()
+            const shouldStreamDirect = kind === 'file' && hasSavePicker && fileSize >= STREAMING_THRESHOLD_BYTES
+            if(kind === 'file' && fileSize >= STREAMING_THRESHOLD_BYTES && !hasSavePicker){
+                const ok = await confirm({
+                    title: "Нет прямого сохранения",
+                    message: `Файл около ${(fileSize/1024/1024).toFixed(1)} МБ будет загружен через память браузера. Продолжить?`,
+                    confirmText: "Продолжить",
+                    cancelText: "Отмена",
+                })
+                if(!ok) return
+            }
             if(shouldStreamDirect){
                 try{
                     fileHandle = await window.showSaveFilePicker({ suggestedName: file.name })
