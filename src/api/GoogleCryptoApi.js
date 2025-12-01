@@ -107,8 +107,13 @@ export default class GoogleCryptoApi {
         this.onStorageInitFinish =
             typeof options.onStorageInitFinish === "function" ? options.onStorageInitFinish : null;
         this._oneTimeUnlockPassword = null;
+        this._skipUnlockNext = false;
     }
     async ensureConfigLoaded() {
+        if (!this._configPromise && this.currentConfig?.key && this.currentConfig?.mode) {
+            this._configPromise = Promise.resolve(this.currentConfig);
+            return this._configPromise;
+        }
         if (!this._configPromise) {
             this._configPromise = this.loadCryptoConfig()
                 .then((config) => {
@@ -148,6 +153,14 @@ export default class GoogleCryptoApi {
         parsed.encryptionAlgorithm = normalizeAlgorithmName(parsed.encryptionAlgorithm || DEFAULT_ENCRYPTION_ALGORITHM);
         parsed.pbkdf2Iterations = this.pickPbkdf2Iterations(parsed.pbkdf2Iterations);
         parsed.pbkdf2Hash = this.pickPbkdf2Hash(parsed.pbkdf2Hash);
+        if (this._skipUnlockNext && this.currentConfig?.key && this.currentConfig?.mode === parsed.mode) {
+            this._skipUnlockNext = false;
+            this.cryptoMode = this.normalizeCryptoMode(parsed.mode);
+            this.ivByteLength =
+                this.cryptoMode === CRYPTO_MODE_RCLONE ? RCLONE_IV_BYTE_LENGTH : IV_BYTE_LENGTH;
+            this._cachedKeyBytes = null;
+            return { ...parsed, ...this.currentConfig };
+        }
         this._configFileId = configMeta?.id ?? this._configFileId;
         this._keyFileId = keyMeta?.id ?? this._keyFileId;
         this._rcloneKey1Id = key1Meta?.id ?? this._rcloneKey1Id;
@@ -307,6 +320,7 @@ export default class GoogleCryptoApi {
                 this._cachedKeyBytes = null;
                 this._cachedKeyBytes = null;
                 this.currentConfig = { ...this.currentConfig, key: resultConfig.key };
+                this._skipUnlockNext = true;
             } finally {
                 if (this.onStorageInitFinish) {
                     try {
