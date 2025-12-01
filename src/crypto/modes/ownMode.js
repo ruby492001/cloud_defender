@@ -1,5 +1,6 @@
 import { Hasher } from "../hasher.js";
 import { ALG, CryptoSuite } from "../CryptoSuite.js";
+import { bytesToHex, hexToBytes } from "../../utils/byteUtils.js";
 
 const DEFAULT_ALGORITHM = ALG.ARIA_128_CFB128;
 const ALG_VALUES = new Set(Object.values(ALG));
@@ -11,6 +12,7 @@ const KEY_LENGTH_BY_ALG = {
     [ALG.ARIA_128_CFB128]: 16,
     [ALG.ARIA_256_CFB128]: 32,
 };
+const NAME_IV_LENGTH = 16;
 
 function normalizeAlgorithm(value) {
     if (typeof value === "number" && ALG_VALUES.has(value)) {
@@ -177,15 +179,38 @@ export function calculateEncryptedSize({ originalSize, ivByteLength }) {
 }
 
 export function encryptFileName(name, { keyBytes, encryptionAlgorithm, mode } = {}) {
-    void keyBytes;
-    void encryptionAlgorithm;
-    void mode;
-    return name;
+    if (!name) return name;
+    const algorithm = normalizeAlgorithm(encryptionAlgorithm || DEFAULT_ALGORITHM);
+    const key = normalizeKey(keyBytes, algorithm);
+    const iv = generateIv(NAME_IV_LENGTH);
+    const ctx = CryptoSuite.cfb().createContext(algorithm, key, iv, true);
+    const plain = new TextEncoder().encode(name);
+    const cipher = ctx.update(plain);
+    const payload = new Uint8Array(iv.byteLength + cipher.byteLength);
+    payload.set(iv, 0);
+    payload.set(cipher, iv.byteLength);
+    if (typeof ctx.finalize === "function") ctx.finalize();
+    if (typeof ctx.free === "function") ctx.free();
+    return bytesToHex(payload);
 }
 
 export function decryptFileName(name, { keyBytes, encryptionAlgorithm, mode } = {}) {
-    void keyBytes;
-    void encryptionAlgorithm;
-    void mode;
-    return name;
+    if (!name) return name;
+    try {
+        const algorithm = normalizeAlgorithm(encryptionAlgorithm || DEFAULT_ALGORITHM);
+        const key = normalizeKey(keyBytes, algorithm);
+        const bytes = hexToBytes(name);
+        if (!(bytes instanceof Uint8Array) || bytes.byteLength <= NAME_IV_LENGTH) {
+            return name;
+        }
+        const iv = bytes.subarray(0, NAME_IV_LENGTH);
+        const cipher = bytes.subarray(NAME_IV_LENGTH);
+        const ctx = CryptoSuite.cfb().createContext(algorithm, key, iv, false);
+        const plain = ctx.update(cipher);
+        if (typeof ctx.finalize === "function") ctx.finalize();
+        if (typeof ctx.free === "function") ctx.free();
+        return new TextDecoder().decode(plain);
+    } catch {
+        return name;
+    }
 }

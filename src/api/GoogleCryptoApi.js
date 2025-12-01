@@ -122,6 +122,10 @@ export default class GoogleCryptoApi {
                     this.ivByteLength =
                         this.cryptoMode === CRYPTO_MODE_RCLONE ? RCLONE_IV_BYTE_LENGTH : IV_BYTE_LENGTH;
                     this._cachedKeyBytes = null;
+                    if (!this._loggedKey) {
+                        console.info("[Crypto] current key (debug)", this.currentConfig?.key);
+                        this._loggedKey = true;
+                    }
                     return nextConfig;
                 })
                 .catch((err) => {
