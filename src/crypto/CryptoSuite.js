@@ -1,10 +1,8 @@
-// src/crypto/CryptoSuite.js
-// Универсальный рантайм для OpenSSL-WASM шимов с Emscripten.
-// Работает с несколькими «свитами» (suite): cfb/ctr/cbc/...,
-// где в wasm-экспорте функции имеют префикс <suite>_ (см. ниже).
+﻿// src/crypto/CryptoSuite.js
+// Utility to work with multiple crypto suites (cfb/ctr/cbc/...) via OpenSSL-WASM built with Emscripten.
 
 // -----------------------------
-// (необязательно) enum для CFB
+// (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ) enum РґР»СЏ CFB
 // -----------------------------
 export const ALG = {
     AES_128_CFB128: 1,
@@ -16,7 +14,7 @@ export const ALG = {
 };
 
 // -----------------------------
-// HMR-устойчивый глобальный реестр
+// HMR-СѓСЃС‚РѕР№С‡РёРІС‹Р№ РіР»РѕР±Р°Р»СЊРЅС‹Р№ СЂРµРµСЃС‚СЂ
 // -----------------------------
 const REGKEY = '__wasm_crypto_suites__';
 const registry =
@@ -26,30 +24,30 @@ const registry =
 //   rec: { promise, Module, api, listeners:Set<function> }
 // }
 
-// Безопасный доступ к heap (работает и без Module.HEAPU8)
+// Р‘РµР·РѕРїР°СЃРЅС‹Р№ РґРѕСЃС‚СѓРї Рє heap (СЂР°Р±РѕС‚Р°РµС‚ Рё Р±РµР· Module.HEAPU8)
 function getHeapU8(M) {
-    // 1) классический рантайм — просто используем
+    // 1) РєР»Р°СЃСЃРёС‡РµСЃРєРёР№ СЂР°РЅС‚Р°Р№Рј вЂ” РїСЂРѕСЃС‚Рѕ РёСЃРїРѕР»СЊР·СѓРµРј
     if (M.HEAPU8) return M.HEAPU8;
 
-    // 2) пытаемся найти буфер памяти в разных местах
+    // 2) РїС‹С‚Р°РµРјСЃСЏ РЅР°Р№С‚Рё Р±СѓС„РµСЂ РїР°РјСЏС‚Рё РІ СЂР°Р·РЅС‹С… РјРµСЃС‚Р°С…
     const buf =
-        (M.wasmMemory && M.wasmMemory.buffer) ||           // минимальный рантайм
-        (M.asm && M.asm.memory && M.asm.memory.buffer) ||  // классический рантайм (часто тут)
-        (M.memory && M.memory.buffer) ||                   // некоторые сборки
+        (M.wasmMemory && M.wasmMemory.buffer) ||           // РјРёРЅРёРјР°Р»СЊРЅС‹Р№ СЂР°РЅС‚Р°Р№Рј
+        (M.asm && M.asm.memory && M.asm.memory.buffer) ||  // РєР»Р°СЃСЃРёС‡РµСЃРєРёР№ СЂР°РЅС‚Р°Р№Рј (С‡Р°СЃС‚Рѕ С‚СѓС‚)
+        (M.memory && M.memory.buffer) ||                   // РЅРµРєРѕС‚РѕСЂС‹Рµ СЃР±РѕСЂРєРё
         null;
 
     if (!buf) {
         throw new Error('WASM memory is not ready (no memory buffer on Module)');
     }
 
-    // 3) кэшируем view и пересоздаём при росте памяти
+    // 3) РєСЌС€РёСЂСѓРµРј view Рё РїРµСЂРµСЃРѕР·РґР°С‘Рј РїСЂРё СЂРѕСЃС‚Рµ РїР°РјСЏС‚Рё
     if (!M.__heapU8 || M.__heapU8.buffer !== buf) {
         M.__heapU8 = new Uint8Array(buf);
     }
     return M.__heapU8;
 }
 
-// Собираем JS-API над C-шимом по префиксу
+// РЎРѕР±РёСЂР°РµРј JS-API РЅР°Рґ C-С€РёРјРѕРј РїРѕ РїСЂРµС„РёРєСЃСѓ
 function buildApi(Module, suite) {
     const p = (name) => `${suite}_${name}`;
     const api = {
@@ -65,7 +63,7 @@ function buildApi(Module, suite) {
     return api;
 }
 
-// Синхронный "драйвер" поверх конкретного суита
+// РЎРёРЅС…СЂРѕРЅРЅС‹Р№ "РґСЂР°Р№РІРµСЂ" РїРѕРІРµСЂС… РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ СЃСѓРёС‚Р°
 function makeSuiteDriver(suite) {
     return {
         ivLength(alg) {
@@ -84,7 +82,7 @@ function makeSuiteDriver(suite) {
             }
             const needIv = api.ivLength(alg);
             if (needIv > 0 && ivU8.length !== needIv) {
-                throw new Error(`[${suite}] IV ${ivU8.length}B ≠ ${needIv}B`);
+                throw new Error(`[${suite}] IV ${ivU8.length}B в‰  ${needIv}B`);
             }
 
             const kptr = M._malloc(keyU8.length || 1);
@@ -103,7 +101,7 @@ function makeSuiteDriver(suite) {
                     const inptr = M._malloc(inlen);
                     heap.set(chunkU8, inptr);
 
-                    // в потоковых режимах, как правило, outlen == inlen, но дадим небольшой запас
+                    // РІ РїРѕС‚РѕРєРѕРІС‹С… СЂРµР¶РёРјР°С…, РєР°Рє РїСЂР°РІРёР»Рѕ, outlen == inlen, РЅРѕ РґР°РґРёРј РЅРµР±РѕР»СЊС€РѕР№ Р·Р°РїР°СЃ
                     const outptr = M._malloc(inlen + 32);
                     const wrote  = api.update(ctx, inptr, inlen, outptr);
                     M._free(inptr);
@@ -136,13 +134,13 @@ function makeSuiteDriver(suite) {
 }
 
 export class CryptoSuite {
-    // ---- публичный API ----
+    // ---- РїСѓР±Р»РёС‡РЅС‹Р№ API ----
 
     /**
-     * Регистрирует суит.
-     * @param {string} suite         имя (e.g. 'cfb', 'ctr', 'cbc')
-     * @param {function} createModule дефолтный экспорт из <suite>_wasm.js
-     * @param {function} locateFile   (p:string)=>string — путь к .wasm
+     * Р РµРіРёСЃС‚СЂРёСЂСѓРµС‚ СЃСѓРёС‚.
+     * @param {string} suite         РёРјСЏ (e.g. 'cfb', 'ctr', 'cbc')
+     * @param {function} createModule РґРµС„РѕР»С‚РЅС‹Р№ СЌРєСЃРїРѕСЂС‚ РёР· <suite>_wasm.js
+     * @param {function} locateFile   (p:string)=>string вЂ” РїСѓС‚СЊ Рє .wasm
      */
     static registerSuite(suite, createModule, locateFile) {
         if (registry.has(suite)) return;
@@ -154,31 +152,31 @@ export class CryptoSuite {
     }
 
     /**
-     * Дождаться инициализации: либо конкретного суита,
-     * либо всех зарегистрированных (если suite не указан).
+     * Р”РѕР¶РґР°С‚СЊСЃСЏ РёРЅРёС†РёР°Р»РёР·Р°С†РёРё: Р»РёР±Рѕ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ СЃСѓРёС‚Р°,
+     * Р»РёР±Рѕ РІСЃРµС… Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹С… (РµСЃР»Рё suite РЅРµ СѓРєР°Р·Р°РЅ).
      */
     static async ready(suite) {
         if (suite) {
             await CryptoSuite._ensureReady(suite);
             return;
         }
-        // все зарегистрированные
+        // РІСЃРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹Рµ
         const keys = [...registry.keys()];
         for (const k of keys) await CryptoSuite._ensureReady(k);
     }
 
-    /** Получить синхронный драйвер конкретного суита */
+    /** РџРѕР»СѓС‡РёС‚СЊ СЃРёРЅС…СЂРѕРЅРЅС‹Р№ РґСЂР°Р№РІРµСЂ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ СЃСѓРёС‚Р° */
     static getSuite(suite) {
-        // проверка наличия API (бросит, если не готов)
+        // РїСЂРѕРІРµСЂРєР° РЅР°Р»РёС‡РёСЏ API (Р±СЂРѕСЃРёС‚, РµСЃР»Рё РЅРµ РіРѕС‚РѕРІ)
         CryptoSuite._getApi(suite);
-        // кешировать не обязательно — драйвер без состояния
+        // РєРµС€РёСЂРѕРІР°С‚СЊ РЅРµ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ вЂ” РґСЂР°Р№РІРµСЂ Р±РµР· СЃРѕСЃС‚РѕСЏРЅРёСЏ
         return makeSuiteDriver(suite);
     }
 
-    /** Удобный алиас для старого кода: CryptoSuite.cfb() */
+    /** РЈРґРѕР±РЅС‹Р№ Р°Р»РёР°СЃ РґР»СЏ СЃС‚Р°СЂРѕРіРѕ РєРѕРґР°: CryptoSuite.cfb() */
     static cfb() { return CryptoSuite.getSuite('cfb'); }
 
-    /** Хуки для не-async кода */
+    /** РҐСѓРєРё РґР»СЏ РЅРµ-async РєРѕРґР° */
     static isReady(suite) {
         const slot = registry.get(suite);
         return !!(slot && slot.rec.api);
@@ -190,7 +188,7 @@ export class CryptoSuite {
         slot.rec.listeners.add(cb);
     }
 
-    /** Отладка */
+    /** РћС‚Р»Р°РґРєР° */
     static debugGetModule(suite) {
         return registry.get(suite)?.rec?.Module ?? null;
     }
@@ -198,7 +196,7 @@ export class CryptoSuite {
         return registry.get(suite)?.rec?.api ?? null;
     }
 
-    // ---- приватные/вспомогательные ----
+    // ---- РїСЂРёРІР°С‚РЅС‹Рµ/РІСЃРїРѕРјРѕРіР°С‚РµР»СЊРЅС‹Рµ ----
 
     static async _ensureReady(suite) {
         const slot = registry.get(suite);
@@ -226,7 +224,7 @@ export class CryptoSuite {
                 rec.Module = Module;
                 rec.api = api;
 
-                // нотифицируем подписчиков (не-async код)
+                // РЅРѕС‚РёС„РёС†РёСЂСѓРµРј РїРѕРґРїРёСЃС‡РёРєРѕРІ (РЅРµ-async РєРѕРґ)
                 for (const cb of rec.listeners) { try { cb(); } catch {} }
                 rec.listeners.clear();
             })();
@@ -257,3 +255,4 @@ export class CryptoSuite {
         return r;
     }
 }
+

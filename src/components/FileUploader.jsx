@@ -1,6 +1,9 @@
 import React, { forwardRef, useImperativeHandle, useRef } from "react";
 
-const FileUploader = forwardRef(function FileUploader({ uploadManager, className = "", showButton = true }, ref) {
+const FileUploader = forwardRef(function FileUploader(
+    { uploadManager, parentId, className = "", showButton = true },
+    ref
+) {
     const inputRef = useRef(null);
 
     const openPicker = () => inputRef.current?.click();
@@ -10,7 +13,7 @@ const FileUploader = forwardRef(function FileUploader({ uploadManager, className
     }));
 
     const onChange = (e) => {
-        uploadManager.addFiles(e.target.files);
+        uploadManager.addFiles(e.target.files, parentId);
         e.target.value = "";
     };
 

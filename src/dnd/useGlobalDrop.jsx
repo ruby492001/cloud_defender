@@ -140,6 +140,9 @@ async function handleCollectedEntries(items, { api, uploadManager }) {
         }
     }
 
+    const defaultParentId =
+        uploadManager.getDefaultParentId?.() || api?.rootId || api?.drive?.rootId || "root";
+
     if (singles.length) {
         const now = Date.now();
         singles.forEach((f, i) => {
@@ -150,14 +153,14 @@ async function handleCollectedEntries(items, { api, uploadManager }) {
                     name: f.name,
                     size: f.size,
                     type: f.type || "application/octet-stream",
-                    parentId: undefined,
+                    parentId: defaultParentId,
                 },
             ]);
         });
     }
 
     for (const [rootName, list] of byRoot.entries()) {
-        const root = await api.createFolder(rootName, undefined);
+        const root = await api.createFolder(rootName, defaultParentId);
         const pseudoList = list.map(({ relPath }) => ({ webkitRelativePath: relPath }));
         const folderPaths = collectFolderPaths(pseudoList, rootName);
         const subMap = await ensureDriveFolders({ api, folderPaths, rootId: root.id });

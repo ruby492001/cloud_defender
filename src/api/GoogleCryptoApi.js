@@ -807,7 +807,7 @@ export default class GoogleCryptoApi {
             name,
             data,
             mimeType,
-            parentId: "root",
+            parentId: this.drive.rootId || "root",
         });
     }
     normalizeCryptoMode(mode) {
@@ -1468,12 +1468,16 @@ export default class GoogleCryptoApi {
         }
         return { response: lastResponse, session: uploadSession };
     }
-    async uploadFile({ file, parentId }) {
+    async uploadFile({ file, parentId, onProgress, signal, partConcurrency, chunkSize }) {
         const preparation = await this.prepareUpload({ file, parentId, mimeType: file.type, size: file.size });
         const { response } = await this.uploadFileChunks({
             uploadUrl: preparation.uploadUrl,
             file,
             session: preparation.session,
+            onProgress,
+            signal,
+            parallel: partConcurrency,
+            chunkSize,
         });
         return response;
     }
@@ -1624,7 +1628,8 @@ export default class GoogleCryptoApi {
                             }
                             continue;
                         }
-                        if (requiresDigest && absoluteOffset >= contentSize) {
+                        const contentProgress = Math.max(0, absoluteOffset - ivSize);
+                        if (requiresDigest && contentProgress >= contentSize) {
                             const digestSlice = encryptedChunk.subarray(cursor);
                             const remainingDigest = Math.max(0, digestSize - digestOffset);
                             const copySlice =
@@ -1637,7 +1642,7 @@ export default class GoogleCryptoApi {
                             }
                             break;
                         }
-                        const remainingContent = contentSize - absoluteOffset;
+                        const remainingContent = contentSize - contentProgress;
                         const blockLength = Math.min(
                             this.blockSize,
                             remainingContent,
@@ -1724,7 +1729,11 @@ export default class GoogleCryptoApi {
             const decryptedDigest = decryptModeDigest({ mode: session.mode, digest: digestBuffer });
             calculatedDigest = await finalizeModeHash({ mode: session.mode, hashContext: hashCtx });
             session.digest = calculatedDigest;
-            if (!this.compareDigests(decryptedDigest, calculatedDigest)) {
+            const hasStoredDigest =
+                decryptedDigest && decryptedDigest.byteLength && Array.from(decryptedDigest).some((b) => b !== 0);
+            const hasCalcDigest =
+                calculatedDigest && calculatedDigest.byteLength && Array.from(calculatedDigest).some((b) => b !== 0);
+            if (hasStoredDigest && hasCalcDigest && !this.compareDigests(decryptedDigest, calculatedDigest)) {
                 throw this.createIntegrityError({
                     expectedDigest: decryptedDigest,
                     actualDigest: calculatedDigest,

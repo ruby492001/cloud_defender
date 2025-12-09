@@ -1,4 +1,4 @@
-import {
+﻿import {
     createContext,
     useCallback,
     useContext,
@@ -30,18 +30,17 @@ export function PasswordPromptProvider({ children }) {
     }, []);
 
     const requestPassword = useCallback((options = {}) => {
-        return new Promise((resolve) => {
-            if (pendingRef.current) {
-                try {
-                    pendingRef.current.resolve(null);
-                } catch {
-                    // ignore cancellation errors
-                }
-            }
-            const id = ++idCounter.current;
-            pendingRef.current = { resolve, id };
+        if (pendingRef.current?.promise) {
+            return pendingRef.current.promise;
+        }
+        const id = ++idCounter.current;
+        let resolver = null;
+        const promise = new Promise((resolve) => {
+            resolver = resolve;
             setRequestState({ id, options });
         });
+        pendingRef.current = { resolve: resolver, id, promise };
+        return promise;
     }, []);
 
     const onCancel = useCallback(() => {
@@ -94,6 +93,7 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
     const [rclonePassword2, setRclonePassword2] = useState("");
 
     const options = request?.options || {};
+    const attempt = typeof options.attempt === "number" ? options.attempt : 0;
 
     useEffect(() => {
         setValue("");
@@ -114,7 +114,10 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
     }
 
     const needsConfirmation = !!options.confirm;
-    const message = options.message || "Enter the password";
+    const message =
+        attempt > 0
+            ? options.message || "Incorrect password. Try again."
+            : options.initialMessage || options.message || "Enter the password";
     const title =
         options.title ||
         (options.reason === "setup"
@@ -181,7 +184,7 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                                 }}
                                 style={overlayStyles.select}
                             >
-                                <option value="own">Собственный алгоритм шифрования</option>
+                                <option value="own">Client-side encryption</option>
                                 <option value="rclone">rclone</option>
                             </select>
                         </label>
@@ -421,3 +424,4 @@ const overlayStyles = {
 };
 
 const HASH_ALGORITHMS = ["SHA-256", "SHA-512", "SHA3-256", "SHA3-512", "BLAKE2b512", "BLAKE2s256"];
+

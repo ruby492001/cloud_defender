@@ -1,13 +1,18 @@
-﻿// src/api/drive.js
-// РРјРїРѕСЂС‚РѕРІ РЅРµ С‚СЂРµР±СѓРµС‚СЃСЏ вЂ” РёСЃРїРѕР»СЊР·СѓРµРј fetch РёР· Р±СЂР°СѓР·РµСЂР°.
+// src/api/drive.js
 
-const DRIVE_BASE = 'https://www.googleapis.com/drive/v3'
+const DRIVE_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_INIT =
     "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3/files";
 
 export class DriveApi {
-    constructor(token) {
+    constructor(token, options = {}) {
+        this.token = token;
+        this.refreshToken = options.refreshToken; // async () => newToken
+        this.rootId = options.rootId || "root";
+    }
+
+    setToken(token) {
         this.token = token;
     }
 
@@ -15,20 +20,38 @@ export class DriveApi {
         return { Authorization: `Bearer ${this.token}`, Accept: "application/json", ...(extra || {}) };
     }
 
+    async fetchWithAuth(url, init = {}, retry = true) {
+        const res = await fetch(url, { ...init, headers: this.authHeaders(init.headers) });
+        if (res.status === 401 && this.refreshToken && retry) {
+            const next = await this.refreshToken().catch(() => null);
+            if (next) {
+                this.token = next;
+                return this.fetchWithAuth(url, init, false);
+            }
+        }
+        return res;
+    }
+
+    async ensureOk(res, label) {
+        if (res.ok) return res;
+        const text = await res.text().catch(() => "");
+        const err = new Error(`${label} ${res.status}${text ? ` ${text}` : ""}`);
+        err.status = res.status;
+        throw err;
+    }
+
     async getFileMeta(id) {
         const url = new URL(`${DRIVE_BASE}/files/${id}`);
         url.searchParams.set("fields", "id,name,mimeType,size,parents");
         url.searchParams.set("supportsAllDrives", "true");
-        const res = await fetch(url, { headers: this.authHeaders() });
-        if (!res.ok) {
-            const t = await res.text();
-            throw new Error(`meta ${res.status} ${t}`);
-        }
+        const res = await this.fetchWithAuth(url, { headers: this.authHeaders() });
+        await this.ensureOk(res, "meta");
         return res.json();
     }
 
-    async listFolder(folderId = "root", pageToken, search) {
-        const qParts = [`'${folderId}' in parents`, "trashed = false"];
+    async listFolder(folderId = this.rootId, pageToken, search) {
+        const target = folderId || this.rootId;
+        const qParts = [`'${target}' in parents`, "trashed = false"];
         if (search && search.trim()) {
             qParts.push(`name contains '${search.replace(/'/g, "\\'")}'`);
         }
@@ -44,42 +67,36 @@ export class DriveApi {
         url.searchParams.set("corpora", "user");
         if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-        const res = await fetch(url, { headers: this.authHeaders() });
-        if (!res.ok) {
-            const t = await res.text();
-            throw new Error(`list ${res.status} ${t}`);
-        }
+        const res = await this.fetchWithAuth(url, { headers: this.authHeaders() });
+        await this.ensureOk(res, "list");
         return res.json();
     }
 
-    async createFolder(name, parentId = "root") {
-        const res = await fetch(`${DRIVE_BASE}/files?supportsAllDrives=true`, {
+    async createFolder(name, parentId = this.rootId) {
+        const res = await this.fetchWithAuth(`${DRIVE_BASE}/files?supportsAllDrives=true`, {
             method: "POST",
             headers: this.authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder", parents: [parentId] }),
         });
-        if (!res.ok) {
-            const t = await res.text();
-            throw new Error(`create folder failed ${res.status} ${t}`);
-        }
+        await this.ensureOk(res, "create folder failed");
         return res.json();
     }
 
     async deleteFile(id) {
-        const res = await fetch(`${DRIVE_BASE}/files/${id}?supportsAllDrives=true`, {
+        const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?supportsAllDrives=true`, {
             method: "DELETE",
             headers: this.authHeaders(),
         });
-        if (!res.ok) throw new Error(`delete failed ${res.status}`);
+        await this.ensureOk(res, "delete failed");
     }
 
     async renameFile(id, newName) {
-        const res = await fetch(`${DRIVE_BASE}/files/${id}?supportsAllDrives=true`, {
+        const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?supportsAllDrives=true`, {
             method: "PATCH",
             headers: this.authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ name: newName }),
         });
-        if (!res.ok) throw new Error(`rename failed ${res.status}`);
+        await this.ensureOk(res, "rename failed");
         return res.json();
     }
 
@@ -88,44 +105,38 @@ export class DriveApi {
         url.searchParams.set("addParents", newParentId);
         if (oldParentId) url.searchParams.set("removeParents", oldParentId);
         url.searchParams.set("supportsAllDrives", "true");
-        const res = await fetch(url, {
+        const res = await this.fetchWithAuth(url, {
             method: "PATCH",
             headers: this.authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({}),
         });
-        if (!res.ok) throw new Error(`move failed ${res.status}`);
+        await this.ensureOk(res, "move failed");
         return res.json();
     }
 
     async copyFile(id, name, newParentId) {
-        const res = await fetch(`${DRIVE_BASE}/files/${id}/copy?supportsAllDrives=true`, {
+        const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}/copy?supportsAllDrives=true`, {
             method: "POST",
             headers: this.authHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ name, parents: [newParentId] }),
         });
-        if (!res.ok) throw new Error(`copy failed ${res.status}`);
+        await this.ensureOk(res, "copy failed");
         return res.json();
     }
 
-    async findFileByName(name, parentId = "root") {
+    async findFileByName(name, parentId = this.rootId) {
         if (!name) return null;
         const url = new URL(`${DRIVE_BASE}/files`);
         const escapedName = name.replace(/'/g, "\\'");
-        url.searchParams.set(
-            "q",
-            `name='${escapedName}' and '${parentId}' in parents and trashed = false`
-        );
+        url.searchParams.set("q", `name='${escapedName}' and '${parentId}' in parents and trashed = false`);
         url.searchParams.set("fields", "files(id,name,mimeType,parents,size,modifiedTime)");
         url.searchParams.set("pageSize", "1");
         url.searchParams.set("supportsAllDrives", "true");
         url.searchParams.set("includeItemsFromAllDrives", "true");
         url.searchParams.set("spaces", "drive");
         url.searchParams.set("corpora", "user");
-        const res = await fetch(url, { headers: this.authHeaders() });
-        if (!res.ok) {
-            const t = await res.text().catch(() => "");
-            throw new Error(`findFileByName failed ${res.status} ${t}`);
-        }
+        const res = await this.fetchWithAuth(url, { headers: this.authHeaders() });
+        await this.ensureOk(res, "findFileByName failed");
         const data = await res.json();
         return (data.files && data.files[0]) || null;
     }
@@ -136,11 +147,11 @@ export class DriveApi {
         const fileSize = Number(size ?? meta.size ?? 0) || 0;
 
         if (!fileSize) {
-            const res = await fetch(`${DRIVE_BASE}/files/${id}?alt=media`, {
+            const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?alt=media`, {
                 headers: this.authHeaders(),
                 signal,
             });
-            if (!res.ok) throw new Error("Download fetch error");
+            await this.ensureOk(res, "Download fetch error");
             const blob = await res.blob();
             if (onChunk) {
                 const arr = new Uint8Array(await blob.arrayBuffer());
@@ -203,7 +214,7 @@ export class DriveApi {
             }
             const task = (async () => {
                 if (signal?.aborted) throw new DOMException("aborted", "AbortError");
-                const res = await fetch(`${DRIVE_BASE}/files/${id}?alt=media`, {
+                const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?alt=media`, {
                     headers: this.authHeaders({ Range: `bytes=${range.start}-${range.end - 1}` }),
                     signal,
                 });
@@ -247,7 +258,7 @@ export class DriveApi {
             mimeType: mimeType || "application/octet-stream",
             ...(parentId ? { parents: [parentId] } : {}),
         };
-        const res = await fetch(DRIVE_UPLOAD_INIT, {
+        const res = await this.fetchWithAuth(DRIVE_UPLOAD_INIT, {
             method: "POST",
             headers: {
                 ...this.authHeaders({ "Content-Type": "application/json; charset=UTF-8" }),
@@ -256,40 +267,34 @@ export class DriveApi {
             },
             body: JSON.stringify(metadata),
         });
-        if (!res.ok) throw new Error(`Init resumable failed: ${res.status} ${await res.text()}`);
+        await this.ensureOk(res, "Init resumable failed");
         const location = res.headers.get("Location");
         if (!location) throw new Error("No Location header for resumable upload");
         return location;
     }
 
-    async uploadSmallFile({ name, data, mimeType = "application/octet-stream", parentId = "root" }) {
+    async uploadSmallFile({ name, data, mimeType = "application/octet-stream", parentId = this.rootId }) {
         const metadata = {
             name,
             mimeType,
             ...(parentId ? { parents: [parentId] } : {}),
         };
-        const createRes = await fetch(`${DRIVE_BASE}/files?supportsAllDrives=true`, {
+        const createRes = await this.fetchWithAuth(`${DRIVE_BASE}/files?supportsAllDrives=true`, {
             method: "POST",
             headers: this.authHeaders({ "Content-Type": "application/json; charset=UTF-8" }),
             body: JSON.stringify(metadata),
         });
-        if (!createRes.ok) {
-            const text = await createRes.text();
-            throw new Error(`Small upload metadata failed ${createRes.status} ${text}`);
-        }
+        await this.ensureOk(createRes, "Small upload metadata failed");
         const created = await createRes.json();
         await this.updateFileContent(created.id, data, mimeType);
         return created;
     }
 
     async downloadSmallFile(id, { responseType = "blob" } = {}) {
-        const res = await fetch(`${DRIVE_BASE}/files/${id}?alt=media`, {
+        const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?alt=media`, {
             headers: this.authHeaders(),
         });
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(`Small download failed ${res.status} ${text}`);
-        }
+        await this.ensureOk(res, "Small download failed");
         if (responseType === "arrayBuffer") {
             return res.arrayBuffer();
         }
@@ -301,7 +306,7 @@ export class DriveApi {
 
     async updateFileContent(id, data, mimeType = "application/octet-stream") {
         const body = await this._asBlob(data, mimeType);
-        const res = await fetch(
+        const res = await this.fetchWithAuth(
             `${DRIVE_UPLOAD_BASE}/${id}?uploadType=media&supportsAllDrives=true`,
             {
                 method: "PATCH",
@@ -309,10 +314,7 @@ export class DriveApi {
                 body,
             }
         );
-        if (!res.ok) {
-            const text = await res.text().catch(() => "");
-            throw new Error(`update content failed ${res.status} ${text}`);
-        }
+        await this.ensureOk(res, "update content failed");
         return res.json();
     }
 
@@ -335,5 +337,4 @@ export class DriveApi {
         }
         throw new TypeError("Unsupported data type for Drive upload");
     }
-
 }

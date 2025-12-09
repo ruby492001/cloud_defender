@@ -43,8 +43,9 @@ const FolderUploader = forwardRef(function FolderUploader(
         const rootName = getSelectionRootFolderName(files);
         if (!rootName) {
             await confirm({
-                title: "Не удалось определить корень папки",
-                message: "Браузер не вернул корневую папку. В Firefox нужно включить флаг directory picker.",
+                title: "Загрузка папок недоступна",
+                message:
+                    "Браузер не поддерживает выбор папки. Используйте Chrome или Edge, либо перетащите папку на страницу.",
                 confirmText: "Понятно",
                 cancelText: "Закрыть",
             });
@@ -53,7 +54,9 @@ const FolderUploader = forwardRef(function FolderUploader(
 
         const stopBusy = busy.start?.("folder-upload") ?? (() => {});
         try {
-            const root = await api.createFolder(rootName, undefined);
+            const targetParentId =
+                uploadManager.getDefaultParentId?.() || api?.rootId || api?.drive?.rootId || "root";
+            const root = await api.createFolder(rootName, targetParentId);
 
             const folderPaths = collectFolderPaths(files, rootName);
             const subMap = await ensureDriveFolders({ api, folderPaths, rootId: root.id });
@@ -78,7 +81,7 @@ const FolderUploader = forwardRef(function FolderUploader(
         } catch (err) {
             console.error(err);
             await confirm({
-                title: "Ошибка загрузки папки",
+                title: "Не удалось подготовить загрузку",
                 message: err?.message || "Failed to prepare folder upload",
                 confirmText: "Закрыть",
                 cancelText: "Отмена",

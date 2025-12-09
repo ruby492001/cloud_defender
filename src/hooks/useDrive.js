@@ -1,90 +1,169 @@
-// Хук-агрегатор логики: тек. папка, список, пагинация, поиск, сортировка, хлебные крошки
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { DriveApi } from '../api/drive.js'
-import GoogleCryptoApi from '../api/GoogleCryptoApi.js'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DriveApi } from "../api/drive.js";
+import GoogleCryptoApi from "../api/GoogleCryptoApi.js";
 
-export function useDrive(token, options = {}){
-    const { requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish } = options || {}
-    const coreApi = useMemo(()=> new DriveApi(token), [token])
-    const api = useMemo(()=> new GoogleCryptoApi(coreApi, {
-        promptPassword: requestPassword,
+export function useDrive(token, options = {}) {
+    const {
+        requestPassword,
         pbkdf2Iterations,
         pbkdf2Hash,
         onStorageInitStart,
         onStorageInitFinish,
-    }), [coreApi, requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish])
-    const [configReady, setConfigReady] = useState(false)
-    useEffect(()=>{
-        let cancelled = false
-        ;(async()=>{
-            try{
-                await api.ensureConfigLoaded()
-            }catch(e){
-            }finally{
-                if(!cancelled) setConfigReady(true)
+        refreshAccessToken,
+        baseFolderId = "root",
+        baseName = "Storage",
+        onUnauthorized,
+        rootId = baseFolderId,
+    } = options || {};
+
+    const coreApi = useMemo(
+        () => new DriveApi(token, { refreshToken: refreshAccessToken, rootId }),
+        [token, refreshAccessToken, rootId]
+    );
+    useEffect(() => {
+        coreApi.rootId = baseFolderId || rootId || "root";
+    }, [coreApi, baseFolderId, rootId]);
+    const api = useMemo(
+        () =>
+            new GoogleCryptoApi(coreApi, {
+                promptPassword: requestPassword,
+                pbkdf2Iterations,
+                pbkdf2Hash,
+                onStorageInitStart,
+                onStorageInitFinish,
+            }),
+        [coreApi, requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish]
+    );
+
+    const [configReady, setConfigReady] = useState(false);
+    const [currentFolder, setCurrentFolder] = useState(baseFolderId);
+    const [breadcrumb, setBreadcrumb] = useState([{ id: baseFolderId, name: baseName }]);
+    const [items, setItems] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [nextPageToken, setNextPageToken] = useState(undefined);
+    const [search, setSearch] = useState("");
+    const [sort, setSort] = useState({ field: "name", dir: "asc" });
+    const loadingRef = useRef(false);
+    const currentFolderRef = useRef(baseFolderId);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                await api.ensureConfigLoaded();
+            } catch (e) {
+                // ignore
+            } finally {
+                if (!cancelled) setConfigReady(true);
             }
-        })()
-        return ()=>{ cancelled = true }
-    }, [api])
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [api]);
 
-    // Навигация
-    const [currentFolder, setCurrentFolder] = useState('root')
-    const [breadcrumb, setBreadcrumb] = useState([{ id:'root', name:'Мой диск' }])
+    const loadMore = useCallback(
+        async (folderId, pageToken, searchText, replace) => {
+            const targetFolder = folderId ?? currentFolderRef.current;
+            if (!targetFolder || loadingRef.current) return;
+            loadingRef.current = true;
+            setLoading(true);
+            try {
+                const res = await api.listFolder(targetFolder, pageToken ?? nextPageToken, searchText ?? search);
+                setItems((prev) => (replace ? res.files || [] : [...prev, ...(res.files || [])]));
+                setNextPageToken(res.nextPageToken);
+                setError(null);
+            } catch (e) {
+                if (e?.status === 401) {
+                    onUnauthorized?.();
+                }
+                setError(e?.message || "Не удалось загрузить содержимое папки");
+            } finally {
+                loadingRef.current = false;
+                setLoading(false);
+            }
+        },
+        [api, nextPageToken, search, onUnauthorized]
+    );
 
-    // Данные/состояния
-    const [items, setItems] = useState([])
-    const [loading, setLoading] = useState(false)
-    const [error, setError] = useState(null)
-    const [nextPageToken, setNextPageToken] = useState(undefined)
+    useEffect(() => {
+        (async () => {
+            await loadMore(baseFolderId, undefined, "", true);
+        })();
+    }, [baseFolderId]);
 
-    // Поиск и сортировка
-    const [search, setSearch] = useState('')
-    const [sort, setSort] = useState({ field:'name', dir:'asc' })
+    const setSortBy = useCallback((field) => {
+        setSort((prev) => ({ field, dir: prev.field === field && prev.dir === "asc" ? "desc" : "asc" }));
+    }, []);
 
-    // Первая загрузка
-    useEffect(()=>{ (async()=>{ await loadMore('root', undefined, '', true) })() }, [])
+    const openFolder = useCallback(
+        async (folder) => {
+            setBreadcrumb((prev) => {
+                const idx = prev.findIndex((x) => x.id === folder.id);
+                if (idx >= 0) return prev.slice(0, idx + 1);
+                return [...prev, { id: folder.id, name: folder.name }];
+            });
+            currentFolderRef.current = folder.id;
+            setItems([]);
+            setNextPageToken(undefined);
+            setCurrentFolder(folder.id);
+            await loadMore(folder.id, undefined, search, true);
+        },
+        [loadMore, search]
+    );
 
-    // Листинг с поддержкой пагинации и замены списка
-    const loadMore = useCallback(async (folderId = currentFolder, pageToken, searchText, replace)=>{
-        if(!folderId || loading) return
-        setLoading(true)
-        try{
-            const res = await api.listFolder(folderId, pageToken ?? nextPageToken, searchText ?? search)
-            setItems(prev => replace ? (res.files||[]) : [...prev, ...(res.files||[])])
-            setNextPageToken(res.nextPageToken)
-            setError(null)
-        }catch(e){ setError(e?.message||'Ошибка загрузки') } finally{ setLoading(false) }
-    }, [api, currentFolder, nextPageToken, search, loading])
+    const upTo = useCallback(
+        async (id) => {
+            const idx = breadcrumb.findIndex((x) => x.id === id);
+            if (idx >= 0) {
+                setBreadcrumb(breadcrumb.slice(0, idx + 1));
+                currentFolderRef.current = id;
+                setItems([]);
+                setNextPageToken(undefined);
+                setCurrentFolder(id);
+                await loadMore(id, undefined, search, true);
+            }
+        },
+        [breadcrumb, loadMore, search]
+    );
 
-    // Переключение сортировки: field + направление
-    const setSortBy = useCallback((field)=>{
-        setSort(prev => ({ field, dir: prev.field===field && prev.dir==='asc' ? 'desc' : 'asc' }))
-    }, [])
-
-    // Открыть папку/подняться назад
-    const openFolder = useCallback(async (folder)=>{
-        setBreadcrumb(prev => {
-            const idx = prev.findIndex(x => x.id === folder.id)
-            if(idx >= 0) return prev.slice(0, idx+1)
-            return [...prev, { id: folder.id, name: folder.name }]
-        })
-        setItems([]); setNextPageToken(undefined); setCurrentFolder(folder.id)
-        await loadMore(folder.id, undefined, search, true)
-    }, [loadMore, search])
-
-    const upTo = useCallback(async (id)=>{
-        const idx = breadcrumb.findIndex(x => x.id === id)
-        if(idx >= 0){
-            setBreadcrumb(breadcrumb.slice(0, idx+1))
-            setItems([]); setNextPageToken(undefined); setCurrentFolder(id)
-            await loadMore(id, undefined, search, true)
+    const refresh = useCallback(async () => {
+        const target = currentFolderRef.current;
+        if (target) {
+            setItems([]);
+            setNextPageToken(undefined);
+            await loadMore(target, undefined, search, true);
         }
-    }, [breadcrumb, loadMore, search])
+    }, [loadMore, search]);
 
-    // Принудительное обновление текущей папки
-    const refresh = useCallback(async ()=>{
-        if(currentFolder){ setItems([]); setNextPageToken(undefined); await loadMore(currentFolder, undefined, search, true) }
-    }, [currentFolder, loadMore, search])
+    useEffect(() => {
+        currentFolderRef.current = baseFolderId;
+        setCurrentFolder(baseFolderId);
+        setBreadcrumb([{ id: baseFolderId, name: baseName }]);
+        setItems([]);
+        setNextPageToken(undefined);
+        setSearch("");
+        (async () => {
+            await loadMore(baseFolderId, undefined, "", true);
+        })();
+    }, [baseFolderId, baseName]);
 
-    return { api, items, loading, error, currentFolder, nextPageToken, loadMore, openFolder, upTo, breadcrumb, setSearch, refresh, sort, setSortBy, configReady }
+    return {
+        api,
+        items,
+        loading,
+        error,
+        currentFolder,
+        nextPageToken,
+        loadMore,
+        openFolder,
+        upTo,
+        breadcrumb,
+        setSearch,
+        refresh,
+        sort,
+        setSortBy,
+        configReady,
+    };
 }

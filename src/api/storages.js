@@ -1,0 +1,61 @@
+const API_PREFIX = "/api";
+
+async function parseJson(response) {
+    try {
+        return await response.json();
+    } catch (e) {
+        return null;
+    }
+}
+
+async function handleResponse(res, fallbackMessage) {
+    const data = await parseJson(res);
+    if (!res.ok) {
+        const err = new Error(data?.error || fallbackMessage || `Request failed ${res.status}`);
+        err.status = res.status;
+        throw err;
+    }
+    return data;
+}
+
+export async function fetchStorages() {
+    const res = await fetch(`${API_PREFIX}/storages`, {
+        method: "GET",
+        credentials: "include",
+    });
+    return handleResponse(res, "Не удалось получить список хранилищ");
+}
+
+export async function createStorage(payload) {
+    const res = await fetch(`${API_PREFIX}/storages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+    });
+    return handleResponse(res, "Не удалось создать хранилище");
+}
+
+export async function deleteStorage(id) {
+    const res = await fetch(`${API_PREFIX}/storages/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+    });
+    if (res.status === 204) return { id };
+    return handleResponse(res, "Не удалось удалить хранилище");
+}
+
+export async function refreshStorage(id) {
+    const res = await fetch(`${API_PREFIX}/storages/${id}/refresh`, {
+        method: "POST",
+        credentials: "include",
+    });
+    return handleResponse(res, "Не удалось обновить токен хранилища");
+}
+
+export async function logout() {
+    await fetch(`${API_PREFIX}/logout`, {
+        method: "POST",
+        credentials: "include",
+    });
+}
