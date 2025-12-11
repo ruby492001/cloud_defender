@@ -14,12 +14,14 @@ import {
     DEFAULT_DIRECTORY_NAME_ENCRYPTION,
 } from "../crypto/config.js";
 
+const sessionPasswordCache = new Map();
 const PasswordPromptContext = createContext(null);
 
 export function PasswordPromptProvider({ children }) {
     const [requestState, setRequestState] = useState(null);
     const pendingRef = useRef(null);
     const idCounter = useRef(0);
+    const cacheRef = useRef(sessionPasswordCache); // in-memory per-session cache: storageId -> password payload
 
     const finishRequest = useCallback((result) => {
         const pending = pendingRef.current;
@@ -29,7 +31,14 @@ export function PasswordPromptProvider({ children }) {
         pending.resolve(result);
     }, []);
 
+    const cancelPendingPrompt = useCallback(() => {
+        finishRequest(null);
+    }, [finishRequest]);
+
     const requestPassword = useCallback((options = {}) => {
+        if (options.storageId && cacheRef.current.has(options.storageId) && !options.forcePrompt) {
+            return Promise.resolve(cacheRef.current.get(options.storageId));
+        }
         if (pendingRef.current?.promise) {
             return pendingRef.current.promise;
         }
@@ -49,16 +58,21 @@ export function PasswordPromptProvider({ children }) {
 
     const onSubmit = useCallback(
         (value) => {
+            if (requestState?.options?.storageId && value) {
+                cacheRef.current.set(requestState.options.storageId, value);
+            }
             finishRequest(value);
         },
-        [finishRequest]
+        [finishRequest, requestState]
     );
 
     const contextValue = useMemo(
         () => ({
             requestPassword,
+            clearPasswordCache: () => cacheRef.current.clear(),
+            cancelPendingPrompt,
         }),
-        [requestPassword]
+        [requestPassword, cancelPendingPrompt]
     );
 
     return (
@@ -75,6 +89,10 @@ export function usePasswordPrompt() {
         throw new Error("usePasswordPrompt must be used inside PasswordPromptProvider");
     }
     return ctx;
+}
+
+export function clearPasswordCacheGlobal() {
+    sessionPasswordCache.clear();
 }
 
 function PasswordPromptDialog({ request, onSubmit, onCancel }) {

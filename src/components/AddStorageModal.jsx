@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { useGoogleLogin, hasGrantedAllScopesGoogle } from "@react-oauth/google";
 
 const scopes = [
@@ -28,12 +28,12 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
                 setGoogleReady(true);
                 setError("");
             } else {
-                setError("Не выданы все разрешения Google Drive");
+                setError("Не получены нужные права Google Drive");
                 setGoogleReady(false);
             }
         },
         onError: () => {
-            setError("Не удалось выбрать Google аккаунт");
+            setError("Не удалось получить разрешения Google аккаунта");
             setGoogleReady(false);
         },
     });
@@ -44,8 +44,13 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
         setError("");
 
         const trimmed = name.trim();
-        if (!trimmed || !code) {
-            if (!trimmed) setError("Укажите название хранилища");
+        const rootTrimmed = rootPath.trim();
+        const hasRoot = rootTrimmed.length > 0;
+        const rootValid = !hasRoot || (rootTrimmed[0] !== "/" && !rootTrimmed.endsWith("/"));
+
+        if (!trimmed || !rootValid || !code) {
+            if (!trimmed) setError("Введите название хранилища");
+            else if (!rootValid) setError("Корневой путь не должен начинаться или заканчиваться на /");
             else setError("Выберите Google аккаунт");
             return;
         }
@@ -53,7 +58,7 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
         try {
             await onCreate?.({
                 name: trimmed,
-                root_path: rootPath?.trim() || "/",
+                root_path: hasRoot ? rootTrimmed : "/",
                 code,
             });
             setName("");
@@ -68,7 +73,12 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
         }
     };
 
-    const nameError = showValidation && !name.trim() ? "Укажите название" : "";
+    const nameError = showValidation && !name.trim() ? "Введите название хранилища" : "";
+    const trimmedRoot = rootPath.trim();
+    const rootError =
+        showValidation && trimmedRoot.length > 0 && (trimmedRoot.startsWith("/") || trimmedRoot.endsWith("/"))
+            ? "Корневой путь не должен начинаться или заканчиваться на /"
+            : "";
     const googleError = showValidation && !code ? "Выберите Google аккаунт" : "";
 
     if (!open) return null;
@@ -105,8 +115,9 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
                             type="text"
                             value={rootPath}
                             onChange={(e) => setRootPath(e.target.value)}
-                            placeholder=""
+                            placeholder="projects/cloud"
                         />
+                        {rootError && <div className="field-error">{rootError}</div>}
                     </label>
 
                     <label className="field">
@@ -127,7 +138,7 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
 
                     <div className="form-actions">
                         <button className="btn primary" type="submit" disabled={busy}>
-                            {busy ? "Добавляем..." : "Добавить"}
+                            {busy ? "Создаем..." : "Создать"}
                         </button>
                     </div>
                 </form>

@@ -274,6 +274,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         onClearFinished = noop,
         onHide = noop,
     } = downloads;
+    const { onUploadDone = noop } = uploads;
 
     const containerRef = useRef(null);
     const scrollSnapshot = useRef(0);
@@ -357,17 +358,6 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
             }),
         [uploadGroups, uploadTasks, downloadTasks],
     );
-
-    useLayoutEffect(() => {
-        const el = containerRef.current;
-        if (!el) return;
-        const maxScroll = Math.max(el.scrollHeight - el.clientHeight, 0);
-        const target = Math.min(scrollSnapshot.current, maxScroll);
-        if (Math.abs(el.scrollTop - target) > 1) {
-            el.scrollTop = target;
-        }
-        scrollSnapshot.current = el.scrollTop;
-    }, [fingerprint]);
 
     useLayoutEffect(() => {
         const el = containerRef.current;

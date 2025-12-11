@@ -13,13 +13,14 @@ import DropHintOverlay from "./components/DropHintOverlay.jsx";
 import { useDrive } from "./hooks/useDrive.js";
 import { DownloadProvider, useDownload } from "./state/DownloadManager.jsx";
 import { BusyProvider, useBusy } from "./components/BusyOverlay.jsx";
-import { PasswordPromptProvider, usePasswordPrompt } from "./state/PasswordPromptProvider.jsx";
+import { PasswordPromptProvider, usePasswordPrompt, clearPasswordCacheGlobal } from "./state/PasswordPromptProvider.jsx";
 import { DialogProvider, useDialog } from "./state/DialogProvider.jsx";
 import { CryptoSuite } from "./crypto/CryptoSuite.js";
 import createCfbModule from "./crypto/wasm/cfb_wasm.js";
 import AuthScreen from "./components/AuthScreen.jsx";
 import AddStorageModal from "./components/AddStorageModal.jsx";
 import StorageMenu from "./components/StorageMenu.jsx";
+import StorageSelectModal from "./components/StorageSelectModal.jsx";
 import { createStorage, fetchStorages, logout as logoutApi, refreshStorage, deleteStorage } from "./api/storages.js";
 import { DriveApi } from "./api/drive.js";
 
@@ -41,20 +42,25 @@ function AppContent({
     activeStorageId,
     onSelectStorage,
 }) {
-    const { requestPassword } = usePasswordPrompt();
+    const { requestPassword, clearPasswordCache, cancelPendingPrompt } = usePasswordPrompt();
+    const handleLogoutLocal = useCallback(() => {
+        clearPasswordCache?.();
+        cancelPendingPrompt?.();
+        onLogout?.();
+    }, [clearPasswordCache, cancelPendingPrompt, onLogout]);
     const { prompt, confirm } = useDialog();
     const [creatingStorage, setCreatingStorage] = useState(false);
     const handleStorageInitStart = useCallback(() => setCreatingStorage(true), []);
     const handleStorageInitFinish = useCallback(() => setCreatingStorage(false), []);
 
     const drive = useDrive(driveToken, {
-        requestPassword,
+        requestPassword: (opts) => requestPassword({ ...(opts || {}), storageId: activeStorageId }),
         onStorageInitStart: handleStorageInitStart,
         onStorageInitFinish: handleStorageInitFinish,
         refreshAccessToken: refreshDriveToken,
         baseFolderId,
         baseName,
-        onUnauthorized: onLogout,
+        onUnauthorized: handleLogoutLocal,
     });
     const { api, loading: driveLoading, configReady } = drive;
     const initStarted = useRef(false);
@@ -119,6 +125,7 @@ function AppContent({
                             onCancelGroup: uploadManager.cancelGroup,
                             onRemoveGroup: uploadManager.removeGroup,
                             onClose: uploadManager.closePanel,
+                            onUploadDone: (task) => scheduleRefreshIfSameFolder(task?.parentId),
                         }}
                         downloads={{
                             tasks: download.tasks,
@@ -162,12 +169,27 @@ function AppContent({
                 const fileUploadRef = useRef(null);
                 const folderUploadRef = useRef(null);
                 const [createMenu, setCreateMenu] = useState(null);
+                const refreshPendingRef = useRef(false);
+                const refreshTimerRef = useRef(null);
+                const doneUploadsRef = useRef(new Set());
 
                 useEffect(() => {
                     if (currentFolder) {
                         uploadManager.setDefaultParentId(currentFolder);
                     }
+                    // сбрасываем трекинг завершённых задач при смене каталога
+                    doneUploadsRef.current = new Set();
                 }, [currentFolder, uploadManager]);
+
+                useEffect(() => {
+                    return () => {
+                        if (refreshTimerRef.current) {
+                            clearTimeout(refreshTimerRef.current);
+                            refreshTimerRef.current = null;
+                        }
+                        refreshPendingRef.current = false;
+                    };
+                }, []);
 
                 useEffect(() => {
                     const sentinel = sentinelRef.current;
@@ -234,6 +256,25 @@ function AppContent({
                     if (it.mimeType === "application/vnd.google-apps.folder") openFolder(it);
                     else enqueue(it);
                 };
+
+                const scheduleRefreshIfSameFolder = (targetParentId) => {
+                    if (!targetParentId || currentFolder !== targetParentId) return;
+                    if (refreshPendingRef.current) return;
+                    refreshPendingRef.current = true;
+                    refreshTimerRef.current = setTimeout(() => {
+                        refreshPendingRef.current = false;
+                        refresh();
+                    }, 300);
+                };
+
+                useEffect(() => {
+                    uploadManager.tasks.forEach((task) => {
+                        if (task.status === "done" && task.parentId && !doneUploadsRef.current.has(task.id)) {
+                            doneUploadsRef.current.add(task.id);
+                            scheduleRefreshIfSameFolder(task.parentId);
+                        }
+                    });
+                }, [uploadManager.tasks]);
 
                 const openMenuAt = (pt, item) => {
                     setCreateMenu(null);
@@ -634,6 +675,7 @@ export default function App() {
     const [globalError, setGlobalError] = useState("");
     const [addModalOpen, setAddModalOpen] = useState(false);
     const [blockAddModal, setBlockAddModal] = useState(false);
+    const [selectModalOpen, setSelectModalOpen] = useState(false);
     const [deleteTarget, setDeleteTarget] = useState(null);
     const [deleteBusy, setDeleteBusy] = useState(false);
 
@@ -647,6 +689,7 @@ export default function App() {
     };
 
     const clearSession = useCallback(() => {
+        clearPasswordCacheGlobal();
         setUser(null);
         setStorages([]);
         setActiveStorageId(null);
@@ -662,6 +705,11 @@ export default function App() {
     const handleLogout = useCallback(async () => {
         await logoutApi().catch(() => {});
         clearSession();
+        try {
+            window.location.reload();
+        } catch (_) {
+            // ignore reload errors
+        }
     }, [clearSession]);
     const loadStorages = useCallback(async () => {
         if (!user) return;
@@ -678,13 +726,13 @@ export default function App() {
                 setRootReady(false);
             } else {
                 setBlockAddModal(false);
-                setActiveStorageId((prev) => {
-                    const nextId = prev && list.find((s) => s.id === prev) ? prev : list[0].id;
+                if (!activeStorageId || !list.find((s) => s.id === activeStorageId)) {
+                    setActiveStorageId(null);
                     setDriveToken(null);
                     setRootReady(false);
                     setBaseFolderId("root");
-                    return nextId;
-                });
+                    setSelectModalOpen(true);
+                }
             }
         } catch (e) {
             if (e?.status === 401) {
@@ -693,7 +741,7 @@ export default function App() {
                 setGlobalError(e?.message || "Не удалось загрузить хранилища");
             }
         }
-    }, [user, clearSession]);
+    }, [user, clearSession, activeStorageId]);
 
     const refreshDriveToken = useCallback(async () => {
         if (!activeStorageId) return null;
@@ -850,11 +898,23 @@ export default function App() {
                         <AuthScreen onAuthenticated={handleAuthenticated} />
                     )}
 
-                    <AddStorageModal
-                        open={addModalOpen}
-                        blocking={blockAddModal}
-                        onClose={() => (!blockAddModal ? setAddModalOpen(false) : null)}
-                        onCreate={handleCreateStorage}
+                        <AddStorageModal
+                            open={addModalOpen}
+                            blocking={blockAddModal}
+                            onClose={() => (!blockAddModal ? setAddModalOpen(false) : null)}
+                            onCreate={handleCreateStorage}
+                        />
+                    <StorageSelectModal
+                        open={selectModalOpen}
+                        storages={storages}
+                        onSelect={(id) => {
+                            setActiveStorageId(id);
+                            setDriveToken(null);
+                            setRootReady(false);
+                            setBaseFolderId("root");
+                            setSelectModalOpen(false);
+                        }}
+                        onClose={() => setSelectModalOpen(false)}
                     />
                     {deleteTarget && (
                         <div className="modal confirm-modal" onClick={() => (!deleteBusy ? setDeleteTarget(null) : null)}>
