@@ -1,37 +1,37 @@
 // src/components/UploadOverlay.jsx
 import React from "react";
+import { t } from "../strings.js";
 
 export default function UploadOverlay({
-                                          tasks = [],
-                                          groups = [],
-                                          hidden = false,
-                                          allDone = false,
-                                          onCancelTask = () => {},
-                                          onRemoveTask = () => {},
-                                          onCancelGroup = () => {},
-                                          onRemoveGroup = () => {},
-                                          onClose = () => {},
-                                      }) {
+    tasks = [],
+    groups = [],
+    hidden = false,
+    allDone = false,
+    onCancelTask = () => {},
+    onRemoveTask = () => {},
+    onCancelGroup = () => {},
+    onRemoveGroup = () => {},
+    onClose = () => {},
+}) {
     const safeTasks = Array.isArray(tasks) ? tasks : [];
     const safeGroups = Array.isArray(groups) ? groups : [];
 
     if (hidden || (safeTasks.length === 0 && safeGroups.length === 0)) return null;
 
-    // файлы без группы показываем пофайлово
     const fileRows = safeTasks.filter((t) => !t.groupId);
 
     const statusLabel = (s) =>
         s === "queued"
-            ? "В очереди"
+            ? t("upload_overlay_queue")
             : s === "init"
-                ? "Инициализация"
+                ? t("upload_overlay_init")
                 : s === "uploading"
-                    ? "Загрузка"
+                    ? t("upload_overlay_uploading")
                     : s === "done"
-                        ? "Готово"
+                        ? t("upload_overlay_done")
                         : s === "cancelled"
-                            ? "Отменено"
-                            : "Ошибка";
+                            ? t("upload_overlay_cancelled")
+                            : t("upload_overlay_error");
 
     return (
         <div
@@ -52,18 +52,19 @@ export default function UploadOverlay({
             }}
         >
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <div style={{ fontWeight: 600, fontSize: 16, flex: 1 }}>Загрузка в Google Drive</div>
+                <div style={{ fontWeight: 600, fontSize: 16, flex: 1 }}>
+                    {t("upload_overlay_title")}
+                </div>
                 {allDone && (
                     <button
                         onClick={onClose}
                         style={{ border: "1px solid #ddd", background: "white", borderRadius: 8, padding: "6px 10px", cursor: "pointer" }}
                     >
-                        Закрыть
+                        {t("upload_overlay_close")}
                     </button>
                 )}
             </div>
 
-            {/* Папки (агрегированные группы) */}
             {safeGroups.length > 0 && (
                 <div style={{ display: "grid", gap: 8, marginBottom: fileRows.length ? 12 : 0 }}>
                     {safeGroups.map((g) => {
@@ -74,45 +75,40 @@ export default function UploadOverlay({
                         const finished = done + failed + cancelled;
                         const percent = Math.floor((Math.min(finished, total) / Math.max(total, 1)) * 100);
 
-                        // Честный человекочитабельный статус группы
                         let label;
                         if (finished < total) {
-                            label = "Загрузка";
+                            label = t("upload_overlay_uploading");
                         } else if (failed > 0 && done === 0 && cancelled === 0) {
-                            label = "Ошибка";
+                            label = t("upload_overlay_error");
                         } else if (failed > 0) {
-                            label = "Завершено с ошибками";
+                            label = t("upload_overlay_partial_error");
                         } else if (cancelled === total) {
-                            label = "Отменено";
+                            label = t("upload_overlay_cancelled");
                         } else if (cancelled > 0 && done > 0) {
-                            label = "Частично отменено";
+                            label = t("upload_overlay_partial_cancel");
                         } else {
-                            label = "Готово";
+                            label = t("upload_overlay_done");
                         }
 
-                        // Цвет прогресс-бара по приоритету: ошибки > полная отмена > частичная отмена > готово > загрузка
                         const barColor =
                             failed > 0
-                                ? "#ef4444" // красный
+                                ? "#ef4444"
                                 : cancelled === total
-                                    ? "#9ca3af" // серый
+                                    ? "#9ca3af"
                                     : cancelled > 0
-                                        ? "#f59e0b" // оранжевый (частичная отмена)
+                                        ? "#f59e0b"
                                         : finished >= total
-                                            ? "#10b981" // зелёный
-                                            : "#4f46e5"; // фиолетовый (в процессе)
+                                            ? "#10b981"
+                                            : "#4f46e5";
 
-                        const subtitle = `${done} / ${total}${
-                            failed ? ` (ошибок: ${failed})` : ""
-                        }${cancelled ? ` (отменено: ${cancelled})` : ""}`;
-
+                        const subtitle = `${done} / ${total}${failed ? ` (${t("transfer_meta_errors").replace("{count}", failed)})` : ""}${cancelled ? ` (${t("transfer_meta_cancelled").replace("{count}", cancelled)})` : ""}`;
                         const canCancel = finished < total;
 
                         return (
                             <div key={g.id} style={{ border: "1px solid #f3f4f6", borderRadius: 8, padding: 10 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                     <div style={{ flex: 1, fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>
-                                        📁 {g?.name ?? "Папка"}
+                                        {g?.name ?? t("upload_overlay_folder_label")}
                                     </div>
                                     {canCancel ? (
                                         <button
@@ -126,7 +122,7 @@ export default function UploadOverlay({
                                                 cursor: "pointer",
                                             }}
                                         >
-                                            Отмена
+                                            {t("upload_overlay_cancel")}
                                         </button>
                                     ) : (
                                         <button
@@ -140,7 +136,7 @@ export default function UploadOverlay({
                                                 cursor: "pointer",
                                             }}
                                         >
-                                            Удалить
+                                            {t("upload_overlay_remove")}
                                         </button>
                                     )}
                                 </div>
@@ -157,7 +153,7 @@ export default function UploadOverlay({
                                     />
                                 </div>
                                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-                                    {label} · {subtitle}
+                                    {label} • {subtitle}
                                 </div>
                             </div>
                         );
@@ -165,30 +161,29 @@ export default function UploadOverlay({
                 </div>
             )}
 
-            {/* Одиночные файлы (не в группах) */}
             {fileRows.length > 0 && (
                 <div style={{ display: "grid", gap: 8 }}>
-                    {fileRows.map((t) => {
-                        const canCancel = ["queued", "init", "uploading"].includes(t.status);
-                        const canRemove = ["done", "cancelled", "error"].includes(t.status);
-                        const pct = t.status === "queued" ? 0 : t.percent ?? 0;
+                    {fileRows.map((tTask) => {
+                        const canCancel = ["queued", "init", "uploading"].includes(tTask.status);
+                        const canRemove = ["done", "cancelled", "error"].includes(tTask.status);
+                        const pct = tTask.status === "queued" ? 0 : tTask.percent ?? 0;
 
                         const barColor =
-                            t.status === "error"
+                            tTask.status === "error"
                                 ? "#ef4444"
-                                : t.status === "cancelled"
+                                : tTask.status === "cancelled"
                                     ? "#9ca3af"
-                                    : t.status === "done"
+                                    : tTask.status === "done"
                                         ? "#10b981"
                                         : "#4f46e5";
 
                         return (
-                            <div key={t.id} style={{ border: "1px solid #f3f4f6", borderRadius: 8, padding: 10 }}>
+                            <div key={tTask.id} style={{ border: "1px solid #f3f4f6", borderRadius: 8, padding: 10 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                    <div style={{ flex: 1, fontSize: 13, wordBreak: "break-all" }}>{t.name}</div>
+                                    <div style={{ flex: 1, fontSize: 13, wordBreak: "break-all" }}>{tTask.name}</div>
                                     {canCancel && (
                                         <button
-                                            onClick={() => onCancelTask(t.id)}
+                                            onClick={() => onCancelTask(tTask.id)}
                                             style={{
                                                 fontSize: 12,
                                                 padding: "4px 8px",
@@ -198,12 +193,12 @@ export default function UploadOverlay({
                                                 cursor: "pointer",
                                             }}
                                         >
-                                            Отмена
+                                            {t("upload_overlay_cancel")}
                                         </button>
                                     )}
                                     {canRemove && (
                                         <button
-                                            onClick={() => onRemoveTask(t.id)}
+                                            onClick={() => onRemoveTask(tTask.id)}
                                             style={{
                                                 fontSize: 12,
                                                 padding: "4px 8px",
@@ -213,7 +208,7 @@ export default function UploadOverlay({
                                                 cursor: "pointer",
                                             }}
                                         >
-                                            Удалить
+                                            {t("upload_overlay_remove")}
                                         </button>
                                     )}
                                 </div>
@@ -230,9 +225,7 @@ export default function UploadOverlay({
                                     />
                                 </div>
                                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-                                    {statusLabel(t.status)}
-                                    {["uploading", "init", "done", "error", "cancelled"].includes(t.status) ? ` · ${pct}%` : ""}
-                                    {t.error ? <span style={{ color: "#b91c1c" }}> · {t.error}</span> : null}
+                                    {statusLabel(tTask.status)} • {tTask.percent ?? 0}%
                                 </div>
                             </div>
                         );

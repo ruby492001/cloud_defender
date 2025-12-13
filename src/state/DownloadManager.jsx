@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import JSZip from 'jszip'
 import { useDialog } from './DialogProvider.jsx'
+import { t } from "../strings.js";
 
 function computeEtaFromBytes({ startedAt, loaded, total, fallbackTotal }) {
     if (!startedAt) return null;
@@ -31,7 +32,7 @@ export function useDownload(){ const ctx = useContext(DownloadCtx); if(!ctx) thr
 let seq = 0
 const newTaskId = () => `dlt-${Date.now()}-${++seq}`
 const INTEGRITY_ERROR_CODE = 'INTEGRITY_ERROR'
-const INTEGRITY_ERROR_MESSAGE = 'Data integrity corrupted'
+const INTEGRITY_ERROR_MESSAGE = t("integrity_error_message")
 
 const savedOnce = new Set()
 const canUseFileSystemSave = () => typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function'
@@ -205,10 +206,13 @@ export function DownloadProvider({ api, children }){
         const totalBytes = totalBytesKnown ? files.reduce((a,f)=> a + Number(f.size||0), 0) : files.length
         if(totalBytesKnown && totalBytes >= STREAMING_THRESHOLD_BYTES){
             const ok = await confirm({
-                title: "Большая папка",
-                message: `Папка весит примерно ${(totalBytes/1024/1024).toFixed(1)} МБ. Скачать как архив?`,
-                confirmText: "Скачать",
-                cancelText: "Отмена",
+                title: t("downloadmgr_big_folder_title"),
+                message: t("downloadmgr_big_folder_message").replace(
+                    "{mb}",
+                    (totalBytes/1024/1024).toFixed(1)
+                ),
+                confirmText: t("downloadmgr_big_folder_confirm"),
+                cancelText: t("dialog_cancel"),
             })
             if(!ok){
                 setTasks(ts => ts.map(t => t.id === task.id ? { ...t, status:'canceled', abort: undefined, etaSeconds: null } : t))
@@ -277,10 +281,10 @@ export function DownloadProvider({ api, children }){
             const shouldStreamDirect = kind === 'file' && hasSavePicker && fileSize >= STREAMING_THRESHOLD_BYTES
             if(kind === 'file' && fileSize >= STREAMING_THRESHOLD_BYTES && !hasSavePicker){
                 const ok = await confirm({
-                    title: "Нет прямого сохранения",
-                    message: `Файл около ${(fileSize/1024/1024).toFixed(1)} МБ будет загружен через память браузера. Продолжить?`,
-                    confirmText: "Продолжить",
-                    cancelText: "Отмена",
+                    title: t("downloadmgr_no_direct_title"),
+                    message: t("downloadmgr_no_direct_message").replace("{mb}", (fileSize/1024/1024).toFixed(1)),
+                    confirmText: t("dialog_continue"),
+                    cancelText: t("dialog_cancel"),
                 })
                 if(!ok) return
             }

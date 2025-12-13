@@ -1,4 +1,5 @@
 import React, { forwardRef, useImperativeHandle, useRef } from "react";
+import { t } from "../strings.js";
 
 const FileUploader = forwardRef(function FileUploader(
     { uploadManager, parentId, className = "", showButton = true },
@@ -24,7 +25,7 @@ const FileUploader = forwardRef(function FileUploader(
             <input ref={inputRef} type="file" multiple style={{ display: "none" }} onChange={onChange} />
             {showButton && (
                 <button type="button" className={buttonClass} onClick={openPicker}>
-                    Upload files
+                    {t("action_upload_files")}
                 </button>
             )}
         </>

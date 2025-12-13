@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { login as loginRequest, register as registerRequest } from "../api/auth.js";
+import { t } from "../strings.js";
 
 const initialLoginState = { login: "", password: "" };
 const initialRegisterState = { login: "", password: "", confirm: "" };
@@ -12,24 +13,15 @@ export default function AuthScreen({ onAuthenticated }) {
     const [loginError, setLoginError] = useState("");
     const [registerError, setRegisterError] = useState("");
 
-    const handleLoginChange = (field, value) => {
-        setLoginForm((prev) => ({ ...prev, [field]: value }));
-    };
-
-    const handleRegisterChange = (field, value) => {
-        setRegisterForm((prev) => ({ ...prev, [field]: value }));
-    };
-
     const handleLoginSubmit = async (event) => {
         event.preventDefault();
         setBusy(true);
         setLoginError("");
-
         try {
             const user = await loginRequest(loginForm);
             onAuthenticated?.(user);
         } catch (err) {
-            setLoginError(err?.message || "Не удалось выполнить вход");
+            setLoginError(err?.message || t("auth_error_login"));
         } finally {
             setBusy(false);
         }
@@ -38,31 +30,25 @@ export default function AuthScreen({ onAuthenticated }) {
     const handleRegisterSubmit = async (event) => {
         event.preventDefault();
         setRegisterError("");
-
-        if (!registerForm.login.trim() || !registerForm.password.trim()) {
-            setRegisterError("Заполните логин и пароль");
+        const { login, password, confirm } = registerForm;
+        if (!login.trim() || !password.trim()) {
+            setRegisterError(t("auth_error_register_fill"));
             return;
         }
-
-        if (registerForm.password.length < 8) {
-            setRegisterError("Пароль должен быть не короче 8 символов");
+        if (password.length < 8) {
+            setRegisterError(t("auth_error_register_length"));
             return;
         }
-
-        if (registerForm.password !== registerForm.confirm) {
-            setRegisterError("Пароли не совпадают");
+        if (password !== confirm) {
+            setRegisterError(t("auth_error_register_mismatch"));
             return;
         }
-
         setBusy(true);
         try {
-            const user = await registerRequest({
-                login: registerForm.login,
-                password: registerForm.password,
-            });
+            const user = await registerRequest({ login, password });
             onAuthenticated?.(user);
         } catch (err) {
-            setRegisterError(err?.message || "Не удалось создать учетную запись");
+            setRegisterError(err?.message || t("auth_error_register"));
         } finally {
             setBusy(false);
         }
@@ -73,46 +59,42 @@ export default function AuthScreen({ onAuthenticated }) {
             <div className="auth-card auth-single">
                 <div className="auth-card-head">
                     <div>
-                        <h2>Войти</h2>
+                        <h2>{t("auth_login_heading")}</h2>
                     </div>
                 </div>
 
                 <form className="form" onSubmit={handleLoginSubmit}>
                     <label className="field">
-                        <span>Логин</span>
+                        <span>{t("auth_username")}</span>
                         <input
                             className="input"
                             type="text"
                             name="login"
                             autoComplete="username"
                             value={loginForm.login}
-                            onChange={(e) => handleLoginChange("login", e.target.value)}
+                            onChange={(e) => setLoginForm((p) => ({ ...p, login: e.target.value }))}
                             required
                         />
                     </label>
                     <label className="field">
-                        <span>Пароль</span>
+                        <span>{t("auth_password")}</span>
                         <input
                             className="input"
                             type="password"
                             name="password"
                             autoComplete="current-password"
                             value={loginForm.password}
-                            onChange={(e) => handleLoginChange("password", e.target.value)}
+                            onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
                             required
                         />
                     </label>
 
                     <div className="form-actions">
                         <button className="btn primary" type="submit" disabled={busy}>
-                            {busy ? "Входим..." : "Войти"}
+                            {busy ? t("auth_login_busy") : t("auth_login")}
                         </button>
-                        <button
-                            className="btn secondary"
-                            type="button"
-                            onClick={() => setRegisterOpen(true)}
-                        >
-                            Создать аккаунт
+                        <button className="btn secondary" type="button" onClick={() => setRegisterOpen(true)} disabled={busy}>
+                            {t("auth_register")}
                         </button>
                     </div>
                 </form>
@@ -121,53 +103,53 @@ export default function AuthScreen({ onAuthenticated }) {
             </div>
 
             {registerOpen && (
-                <div className="modal register-modal" onClick={() => setRegisterOpen(false)}>
+                <div className="modal register-modal" onClick={() => (!busy ? setRegisterOpen(false) : null)}>
                     <div className="register-dialog" onClick={(e) => e.stopPropagation()}>
                         <div className="auth-card-head">
                             <div>
-                                <p className="eyebrow">Регистрация</p>
-                                <h3>Создать учетную запись</h3>
+                                <p className="eyebrow">{t("auth_register_eyebrow")}</p>
+                                <h3>{t("auth_register_title")}</h3>
                             </div>
-                            <button className="btn ghost" type="button" onClick={() => setRegisterOpen(false)}>
-                                Закрыть
+                            <button className="btn ghost" type="button" onClick={() => setRegisterOpen(false)} disabled={busy}>
+                                {t("auth_close")}
                             </button>
                         </div>
 
                         <form className="form" onSubmit={handleRegisterSubmit}>
                             <label className="field">
-                                <span>Логин</span>
+                                <span>{t("auth_username")}</span>
                                 <input
                                     className="input"
                                     type="text"
                                     name="new-login"
                                     autoComplete="username"
                                     value={registerForm.login}
-                                    onChange={(e) => handleRegisterChange("login", e.target.value)}
+                                    onChange={(e) => setRegisterForm((p) => ({ ...p, login: e.target.value }))}
                                     required
                                 />
                             </label>
                             <label className="field">
-                                <span>Пароль</span>
+                                <span>{t("auth_password")}</span>
                                 <input
                                     className="input"
                                     type="password"
                                     name="new-password"
                                     autoComplete="new-password"
                                     value={registerForm.password}
-                                    onChange={(e) => handleRegisterChange("password", e.target.value)}
+                                    onChange={(e) => setRegisterForm((p) => ({ ...p, password: e.target.value }))}
                                     required
                                     minLength={8}
                                 />
                             </label>
                             <label className="field">
-                                <span>Подтверждение пароля</span>
+                                <span>{t("auth_password_confirm")}</span>
                                 <input
                                     className="input"
                                     type="password"
                                     name="confirm-password"
                                     autoComplete="new-password"
                                     value={registerForm.confirm}
-                                    onChange={(e) => handleRegisterChange("confirm", e.target.value)}
+                                    onChange={(e) => setRegisterForm((p) => ({ ...p, confirm: e.target.value }))}
                                     required
                                     minLength={8}
                                 />
@@ -175,14 +157,15 @@ export default function AuthScreen({ onAuthenticated }) {
 
                             <div className="form-actions">
                                 <button className="btn primary" type="submit" disabled={busy}>
-                                    {busy ? "Создаем..." : "Создать"}
+                                    {busy ? t("auth_register_busy") : t("auth_register_button")}
                                 </button>
                                 <button
                                     className="btn ghost"
                                     type="button"
                                     onClick={() => setRegisterOpen(false)}
+                                    disabled={busy}
                                 >
-                                    Отмена
+                                    {t("auth_register_cancel")}
                                 </button>
                             </div>
                         </form>

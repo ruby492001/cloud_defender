@@ -1,5 +1,6 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { useGoogleLogin, hasGrantedAllScopesGoogle } from "@react-oauth/google";
+import { t } from "../strings.js";
 
 const scopes = [
     "openid",
@@ -28,12 +29,12 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
                 setGoogleReady(true);
                 setError("");
             } else {
-                setError("Не получены нужные права Google Drive");
+                setError(t("add_storage_error_perms"));
                 setGoogleReady(false);
             }
         },
         onError: () => {
-            setError("Не удалось получить разрешения Google аккаунта");
+            setError(t("add_storage_error_google"));
             setGoogleReady(false);
         },
     });
@@ -49,9 +50,9 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
         const rootValid = !hasRoot || (rootTrimmed[0] !== "/" && !rootTrimmed.endsWith("/"));
 
         if (!trimmed || !rootValid || !code) {
-            if (!trimmed) setError("Введите название хранилища");
-            else if (!rootValid) setError("Корневой путь не должен начинаться или заканчиваться на /");
-            else setError("Выберите Google аккаунт");
+            if (!trimmed) setError(t("add_storage_error_name"));
+            else if (!rootValid) setError(t("add_storage_error_root"));
+            else setError(t("add_storage_error_choose_account"));
             return;
         }
         setBusy(true);
@@ -67,19 +68,19 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
             setGoogleReady(false);
             setShowValidation(false);
         } catch (e) {
-            setError(e?.message || "Не удалось создать хранилище");
+            setError(e?.message || t("add_storage_error_create"));
         } finally {
             setBusy(false);
         }
     };
 
-    const nameError = showValidation && !name.trim() ? "Введите название хранилища" : "";
+    const nameError = showValidation && !name.trim() ? t("add_storage_error_name") : "";
     const trimmedRoot = rootPath.trim();
     const rootError =
         showValidation && trimmedRoot.length > 0 && (trimmedRoot.startsWith("/") || trimmedRoot.endsWith("/"))
-            ? "Корневой путь не должен начинаться или заканчиваться на /"
+            ? t("add_storage_error_root")
             : "";
-    const googleError = showValidation && !code ? "Выберите Google аккаунт" : "";
+    const googleError = showValidation && !code ? t("add_storage_error_choose_account") : "";
 
     if (!open) return null;
 
@@ -90,14 +91,14 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
             <div className="register-dialog" onClick={(e) => e.stopPropagation()}>
                 <div className="auth-card-head">
                     <div>
-                        <p className="eyebrow">Новое хранилище</p>
-                        <h3>Добавить</h3>
+                        <p className="eyebrow">{t("add_storage_title")}</p>
+                        <h3>{t("add_storage_add")}</h3>
                     </div>
                 </div>
 
                 <form className="form" onSubmit={handleSubmit}>
                     <label className="field">
-                        <span>Название</span>
+                        <span>{t("add_storage_name")}</span>
                         <input
                             className="input"
                             type="text"
@@ -109,7 +110,7 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
                         {nameError && <div className="field-error">{nameError}</div>}
                     </label>
                     <label className="field">
-                        <span>Корневой путь</span>
+                        <span>{t("add_storage_root")}</span>
                         <input
                             className="input"
                             type="text"
@@ -121,24 +122,32 @@ export default function AddStorageModal({ open, onClose, onCreate, blocking }) {
                     </label>
 
                     <label className="field">
-                        <span>Google аккаунт</span>
+                        <span>{t("add_storage_google_account")}</span>
                         <div className="google-select">
-                            <span className={`status-dot ${googleReady ? "ok" : "warn"}`} aria-label="google status" />
+                            <span
+                                className={`status-dot ${googleReady ? "ok" : "warn"}`}
+                                aria-label={t("aria_google_status")}
+                            />
                             <button
                                 type="button"
                                 className="btn secondary"
                                 onClick={() => googleLogin()}
                                 disabled={busy}
                             >
-                                Выбрать
+                                {t("add_storage_choose_account")}
                             </button>
                         </div>
                         {googleError && <div className="field-error">{googleError}</div>}
                     </label>
 
                     <div className="form-actions">
+                        {canClose && (
+                            <button className="btn secondary" type="button" onClick={onClose} disabled={busy}>
+                                {t("add_storage_close")}
+                            </button>
+                        )}
                         <button className="btn primary" type="submit" disabled={busy}>
-                            {busy ? "Создаем..." : "Создать"}
+                            {busy ? t("add_storage_creating") : t("add_storage_submit")}
                         </button>
                     </div>
                 </form>

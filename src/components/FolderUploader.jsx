@@ -10,10 +10,11 @@ import {
 } from "../utils/tree";
 import { useBusy } from "./BusyOverlay.jsx";
 import { useDialog } from "../state/DialogProvider.jsx";
+import { t } from "../strings.js";
 
 const FolderUploader = forwardRef(function FolderUploader(
     { api, uploadManager, className = "", showButton = true },
-    ref,
+    ref
 ) {
     const inputRef = useRef(null);
     const busy = useBusy();
@@ -43,11 +44,10 @@ const FolderUploader = forwardRef(function FolderUploader(
         const rootName = getSelectionRootFolderName(files);
         if (!rootName) {
             await confirm({
-                title: "Загрузка папок недоступна",
-                message:
-                    "Браузер не поддерживает выбор папки. Используйте Chrome или Edge, либо перетащите папку на страницу.",
-                confirmText: "Понятно",
-                cancelText: "Закрыть",
+                title: t("folder_uploader_title_unavailable"),
+                message: t("folder_uploader_msg_unavailable"),
+                confirmText: t("dialog_understood"),
+                cancelText: t("dialog_close"),
             });
             return;
         }
@@ -68,23 +68,25 @@ const FolderUploader = forwardRef(function FolderUploader(
                 const rel = getRelativePath(f);
                 const trimmed = stripRootFromPath(rel, rootName);
                 const parentId = resolveParentIdForFile(trimmed, subMap, root.id);
-                uploadManager.addTasks([{
-                    id: `${now}_${i}_${f.name}_${f.size}`,
-                    file: f,
-                    name: f.name,
-                    size: f.size,
-                    type: f.type || "application/octet-stream",
-                    parentId,
-                    groupId,
-                }]);
+                uploadManager.addTasks([
+                    {
+                        id: `${now}_${i}_${f.name}_${f.size}`,
+                        file: f,
+                        name: f.name,
+                        size: f.size,
+                        type: f.type || "application/octet-stream",
+                        parentId,
+                        groupId,
+                    },
+                ]);
             });
         } catch (err) {
             console.error(err);
             await confirm({
-                title: "Не удалось подготовить загрузку",
-                message: err?.message || "Failed to prepare folder upload",
-                confirmText: "Закрыть",
-                cancelText: "Отмена",
+                title: t("folder_uploader_title_failed"),
+                message: err?.message || t("folder_uploader_title_failed"),
+                confirmText: t("folder_uploader_close"),
+                cancelText: t("folder_uploader_cancel"),
             });
         } finally {
             stopBusy();
@@ -98,7 +100,7 @@ const FolderUploader = forwardRef(function FolderUploader(
             <input ref={inputRef} type="file" style={{ display: "none" }} onChange={onChange} />
             {showButton && (
                 <button type="button" className={buttonClass} onClick={openPicker}>
-                    Upload folder
+                    {t("folder_uploader_button")}
                 </button>
             )}
         </>

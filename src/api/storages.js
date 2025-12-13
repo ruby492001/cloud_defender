@@ -1,9 +1,11 @@
+import { t } from "../strings.js";
+
 const API_PREFIX = "/api";
 
 async function parseJson(response) {
     try {
         return await response.json();
-    } catch (e) {
+    } catch {
         return null;
     }
 }
@@ -23,7 +25,7 @@ export async function fetchStorages() {
         method: "GET",
         credentials: "include",
     });
-    return handleResponse(res, "Не удалось получить список хранилищ");
+    return handleResponse(res, t("storages_error_fetch"));
 }
 
 export async function createStorage(payload) {
@@ -33,7 +35,7 @@ export async function createStorage(payload) {
         credentials: "include",
         body: JSON.stringify(payload),
     });
-    return handleResponse(res, "Не удалось создать хранилище");
+    return handleResponse(res, t("storages_error_create"));
 }
 
 export async function deleteStorage(id) {
@@ -42,7 +44,7 @@ export async function deleteStorage(id) {
         credentials: "include",
     });
     if (res.status === 204) return { id };
-    return handleResponse(res, "Не удалось удалить хранилище");
+    return handleResponse(res, t("storages_error_delete"));
 }
 
 export async function refreshStorage(id) {
@@ -50,7 +52,7 @@ export async function refreshStorage(id) {
         method: "POST",
         credentials: "include",
     });
-    return handleResponse(res, "Не удалось обновить токен хранилища");
+    return handleResponse(res, t("storages_error_refresh"));
 }
 
 export async function logout() {

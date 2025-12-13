@@ -42,7 +42,7 @@ export class DriveApi {
 
     async getFileMeta(id) {
         const url = new URL(`${DRIVE_BASE}/files/${id}`);
-        url.searchParams.set("fields", "id,name,mimeType,size,parents");
+        url.searchParams.set("fields", "id,name,size,modifiedTime,mimeType,parents,md5Checksum");
         url.searchParams.set("supportsAllDrives", "true");
         const res = await this.fetchWithAuth(url, { headers: this.authHeaders() });
         await this.ensureOk(res, "meta");
@@ -58,13 +58,13 @@ export class DriveApi {
 
         const url = new URL(`${DRIVE_BASE}/files`);
         url.searchParams.set("q", qParts.join(" and "));
-        url.searchParams.set("fields", "files(id,name,mimeType,size,modifiedTime,parents),nextPageToken");
+        url.searchParams.set("fields", "files(id,name,size,modifiedTime,mimeType,parents),nextPageToken");
         url.searchParams.set("orderBy", "folder,name");
-        url.searchParams.set("pageSize", "100");
+        url.searchParams.set("pageSize", "1000");
         url.searchParams.set("supportsAllDrives", "true");
         url.searchParams.set("includeItemsFromAllDrives", "true");
         url.searchParams.set("spaces", "drive");
-        url.searchParams.set("corpora", "user");
+        url.searchParams.set("corpora", "allDrives");
         if (pageToken) url.searchParams.set("pageToken", pageToken);
 
         const res = await this.fetchWithAuth(url, { headers: this.authHeaders() });
@@ -129,12 +129,12 @@ export class DriveApi {
         const url = new URL(`${DRIVE_BASE}/files`);
         const escapedName = name.replace(/'/g, "\\'");
         url.searchParams.set("q", `name='${escapedName}' and '${parentId}' in parents and trashed = false`);
-        url.searchParams.set("fields", "files(id,name,mimeType,parents,size,modifiedTime)");
-        url.searchParams.set("pageSize", "1");
+        url.searchParams.set("fields", "files(id,name,parents,mimeType,size,modifiedTime),nextPageToken");
+        url.searchParams.set("pageSize", "10");
         url.searchParams.set("supportsAllDrives", "true");
         url.searchParams.set("includeItemsFromAllDrives", "true");
         url.searchParams.set("spaces", "drive");
-        url.searchParams.set("corpora", "user");
+        url.searchParams.set("corpora", "allDrives");
         const res = await this.fetchWithAuth(url, { headers: this.authHeaders() });
         await this.ensureOk(res, "findFileByName failed");
         const data = await res.json();

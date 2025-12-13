@@ -1,5 +1,6 @@
 // src/logic/useUploadManager.js
 import { useRef, useState, useCallback } from "react";
+import { t } from "../strings.js";
 
 function computeEtaSeconds({ startedAt, uploaded, total, fallbackTotal }) {
     if (!startedAt) return null;
@@ -23,7 +24,7 @@ export default function useUploadManager({
     partConcurrency = 3,
 }) {
     if (!cryptoApi) {
-        throw new Error("useUploadManager requires cryptoApi instance");
+        throw new Error(t("upload_error_crypto_required"));
     }
 
     const [tasks, setTasks] = useState([]);
@@ -86,10 +87,10 @@ export default function useUploadManager({
                 bumpGroupDelta(task.groupId, "done", 1);
             } catch (err) {
                 if (controller.signal.aborted || cancelledSetRef.current.has(task.id)) {
-                    updateTask(task.id, { status: "cancelled", error: "Cancelled" });
+                    updateTask(task.id, { status: "cancelled", error: t("upload_status_cancelled") });
                     bumpGroupDelta(task.groupId, "cancelled", 1);
                 } else {
-                    updateTask(task.id, { status: "error", error: err?.message || "Upload failed" });
+                    updateTask(task.id, { status: "error", error: err?.message || t("upload_status_failed") });
                     bumpGroupDelta(task.groupId, "failed", 1);
                 }
             } finally {
@@ -106,7 +107,7 @@ export default function useUploadManager({
             const next = queueRef.current.shift();
             if (!next) break;
             if (cancelledSetRef.current.has(next.id)) {
-                updateTask(next.id, { status: "cancelled", error: "Cancelled" });
+                updateTask(next.id, { status: "cancelled", error: t("upload_status_cancelled") });
                 cancelledSetRef.current.delete(next.id);
                 if (next.groupId) bumpGroupDelta(next.groupId, "cancelled", 1);
                 continue;
@@ -168,7 +169,7 @@ export default function useUploadManager({
                 cancelledSetRef.current.add(id);
                 setTasks((prev) =>
                     prev.map((x) =>
-                        x.id === id ? { ...x, status: "cancelled", error: "Cancelled", etaSeconds: null } : x
+                        x.id === id ? { ...x, status: "cancelled", error: t("upload_status_cancelled"), etaSeconds: null } : x
                     )
                 );
                 if (t.groupId) bumpGroupDelta(t.groupId, "cancelled", 1);

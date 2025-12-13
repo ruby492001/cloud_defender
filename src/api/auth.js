@@ -1,11 +1,13 @@
-const API_PREFIX = '/api';
+import { t } from "../strings.js";
+
+const API_PREFIX = "/api";
 
 async function parseResponse(response, fallbackMessage) {
     let data = null;
     try {
         data = await response.json();
     } catch (e) {
-        // ignore parse errors, we'll fall back to a generic message
+        // ignore parse errors, fallback below
     }
 
     if (!response.ok) {
@@ -18,22 +20,42 @@ async function parseResponse(response, fallbackMessage) {
 
 export async function login(payload) {
     const response = await fetch(`${API_PREFIX}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(payload),
     });
 
-    return parseResponse(response, 'Не удалось выполнить вход');
+    return parseResponse(response, t("api_login_error"));
 }
 
 export async function register(payload) {
     const response = await fetch(`${API_PREFIX}/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(payload),
     });
 
-    return parseResponse(response, 'Не удалось создать учетную запись');
+    return parseResponse(response, t("api_register_error"));
+}
+
+export async function changePassword(payload) {
+    const response = await fetch(`${API_PREFIX}/password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+    });
+
+    return parseResponse(response, t("api_change_pwd_error"));
+}
+
+export async function fetchDesktopClient() {
+    const response = await fetch(`${API_PREFIX}/google/desktop-client`, {
+        method: "GET",
+        credentials: "include",
+    });
+
+    return parseResponse(response, t("api_fetch_rclone_error"));
 }

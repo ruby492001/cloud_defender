@@ -1,6 +1,15 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { t } from "../strings.js";
 
-export default function MoveCopyDialog({ api, open, mode, onClose, onConfirm, startFolder = "root", startName = "Текущая папка" }) {
+export default function MoveCopyDialog({
+    api,
+    open,
+    mode,
+    onClose,
+    onConfirm,
+    startFolder = "root",
+    startName = t("movecopy_current_folder"),
+}) {
     const [stack, setStack] = useState([{ id: startFolder, name: startName }]);
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -8,7 +17,7 @@ export default function MoveCopyDialog({ api, open, mode, onClose, onConfirm, st
 
     useEffect(() => {
         if (open) {
-            setStack([{ id: startFolder, name: startName || "Текущая папка" }]);
+            setStack([{ id: startFolder, name: startName || t("movecopy_current_folder") }]);
             void load(startFolder, true, startName);
         }
     }, [open, startFolder, startName]);
@@ -19,7 +28,7 @@ export default function MoveCopyDialog({ api, open, mode, onClose, onConfirm, st
             const res = await api.listOnlyFolders(fid);
             setItems(res.files || []);
             if (replace) {
-                const name = label || (fid === "root" ? "Корень" : "Папка");
+                const name = label || (fid === "root" ? t("movecopy_root") : t("movecopy_folder"));
                 setStack([{ id: fid, name }]);
             }
         } finally {
@@ -45,8 +54,12 @@ export default function MoveCopyDialog({ api, open, mode, onClose, onConfirm, st
         <div className="modal" onMouseDown={(e) => { if (e.target.classList.contains("modal")) onClose(); }}>
             <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
                 <div className="dialog-head">
-                    <div style={{ fontWeight: 700 }}>{mode === "move" ? "Переместить" : "Копировать"} в выбранную папку</div>
-                    <button className="btn" onClick={onClose}>Закрыть</button>
+                    <div style={{ fontWeight: 700 }}>
+                        {mode === "move"
+                            ? t("movecopy_title_move")
+                            : t("movecopy_title_copy")}
+                    </div>
+                    <button className="btn" onClick={onClose}>{t("movecopy_close")}</button>
                 </div>
 
                 <div className="dialog-body">
@@ -61,27 +74,27 @@ export default function MoveCopyDialog({ api, open, mode, onClose, onConfirm, st
 
                     <div ref={listRef} className="list" style={{ borderTop: "1px solid #263244" }}>
                         <div className="row th">
-                            <div></div><div style={{ fontWeight: 700 }}>Папка</div><div></div><div></div><div></div>
+                            <div></div><div style={{ fontWeight: 700 }}>{t("movecopy_folder")}</div><div></div><div></div><div></div>
                         </div>
-                        {items.length === 0 && !loading && <div className="empty">Нет папок</div>}
+                        {items.length === 0 && !loading && <div className="empty">{t("movecopy_no_folders")}</div>}
                         {items.map((it) => (
                             <div key={it.id} className="row" onDoubleClick={() => openFolder(it)}>
                                 <div></div>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                    <img className="type-icon" src={folderSvg} alt="Папка" />
+                                    <img className="type-icon" src={folderSvg} alt={t("movecopy_folder")} />
                                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</div>
                                 </div>
                                 <div></div><div></div><div></div>
                             </div>
                         ))}
-                        {loading && <div className="empty">Загружаем...</div>}
+                        {loading && <div className="empty">{t("movecopy_loading")}</div>}
                     </div>
                 </div>
 
                 <div className="dialog-foot">
-                    <button className="btn" onClick={onClose}>Отмена</button>
+                    <button className="btn" onClick={onClose}>{t("movecopy_cancel")}</button>
                     <button className="btn" onClick={() => onConfirm(stack[stack.length - 1].id)}>
-                        {mode === "move" ? "Переместить сюда" : "Копировать сюда"}
+                        {mode === "move" ? t("movecopy_move_here") : t("movecopy_copy_here")}
                     </button>
                 </div>
             </div>
@@ -89,4 +102,4 @@ export default function MoveCopyDialog({ api, open, mode, onClose, onConfirm, st
     );
 }
 
-const folderSvg = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='%23f59e0b'><path d='M10 4H4a2 2 0 0 0-2 2v2h20V8a2 2 0 0 0-2-2h-8l-2-2z'/><path d='M22 10H2v8a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-8z'/></svg>`
+const folderSvg = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='%23f59e0b'><path d='M10 4H4a2 2 0 0 0-2 2v2h20V8a2 2 0 0 0-2-2h-8l-2-2z'/><path d='M22 10H2v8a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-8z'/></svg>`;

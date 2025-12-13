@@ -29,12 +29,14 @@ export function DialogProvider({ children }) {
 
     const confirm = useCallback((options = {}) => {
         return new Promise((resolve) => {
+            const hasCancel = Object.prototype.hasOwnProperty.call(options, "cancelText");
+            const cancelText = hasCancel ? options.cancelText : "Cancel";
             setConfirmState({
                 open: true,
                 title: options.title || "Confirm",
                 message: options.message || "",
                 confirmText: options.confirmText || "Continue",
-                cancelText: options.cancelText || "Cancel",
+                cancelText,
                 resolve,
             });
         });
@@ -69,9 +71,11 @@ export function DialogProvider({ children }) {
                         <Title>{confirmState.title}</Title>
                         {confirmState.message && <Message>{confirmState.message}</Message>}
                         <Actions>
-                            <button className="btn secondary" onClick={() => handleConfirm(false)}>
-                                {confirmState.cancelText}
-                            </button>
+                            {confirmState.cancelText !== null && confirmState.cancelText !== false && (
+                                <button className="btn secondary" onClick={() => handleConfirm(false)}>
+                                    {confirmState.cancelText}
+                                </button>
+                            )}
                             <button className="btn" onClick={() => handleConfirm(true)}>
                                 {confirmState.confirmText}
                             </button>

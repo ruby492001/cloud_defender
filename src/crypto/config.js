@@ -2,6 +2,7 @@ import { DEFAULT_ENCRYPTION_ALGORITHM, normalizeAlgorithmName } from "./algorith
 
 export const CONFIG_FILE_NAME = ".crypto.config";
 export const KEY_FILE_NAME = ".key";
+export const TMP_KEY_FILE_NAME = ".tmp_key";
 export const RCLONE_KEY_FILE_1 = ".key1";
 export const RCLONE_KEY_FILE_2 = ".key2";
 export const RCLONE_KEY_FILES = [RCLONE_KEY_FILE_1, RCLONE_KEY_FILE_2];

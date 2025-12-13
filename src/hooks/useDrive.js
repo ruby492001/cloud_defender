@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DriveApi } from "../api/drive.js";
+import { t } from "../strings.js";
 import GoogleCryptoApi from "../api/GoogleCryptoApi.js";
 
 export function useDrive(token, options = {}) {
@@ -11,9 +12,10 @@ export function useDrive(token, options = {}) {
         onStorageInitFinish,
         refreshAccessToken,
         baseFolderId = "root",
-        baseName = "Storage",
+        baseName = t("default_storage_name"),
         onUnauthorized,
         rootId = baseFolderId,
+        storageId,
     } = options || {};
 
     const coreApi = useMemo(
@@ -31,8 +33,9 @@ export function useDrive(token, options = {}) {
                 pbkdf2Hash,
                 onStorageInitStart,
                 onStorageInitFinish,
+                storageId,
             }),
-        [coreApi, requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish]
+        [coreApi, requestPassword, pbkdf2Iterations, pbkdf2Hash, onStorageInitStart, onStorageInitFinish, storageId]
     );
 
     const [configReady, setConfigReady] = useState(false);
@@ -78,7 +81,7 @@ export function useDrive(token, options = {}) {
                 if (e?.status === 401) {
                     onUnauthorized?.();
                 }
-                setError(e?.message || "Не удалось загрузить содержимое папки");
+                setError(e?.message || t("drive_error_folder"));
             } finally {
                 loadingRef.current = false;
                 setLoading(false);

@@ -23,6 +23,7 @@ import {
     serializeConfig,
     CONFIG_FILE_NAME,
     KEY_FILE_NAME,
+    TMP_KEY_FILE_NAME,
     RCLONE_KEY_FILE_1,
     RCLONE_KEY_FILE_2,
     CONTROL_PHRASE,
@@ -41,6 +42,7 @@ import {
 } from "../crypto/algorithms.js";
 
 import { deriveKeyBytes } from "../crypto/pbkdf2.js";
+import { t } from "../strings.js";
 import { hexToBytes, bytesToHex, concatBytes, utf8ToBytes, bytesToUtf8 } from "../utils/byteUtils.js";
 import { scrypt as wasmScrypt } from "hash-wasm";
 import AES from "aes-js";
@@ -67,6 +69,7 @@ const PBKDF2_ITERATIONS = 210000;
 export const EXCLUDED_FILE_NAMES = [
     CONFIG_FILE_NAME,
     KEY_FILE_NAME,
+    TMP_KEY_FILE_NAME,
     RCLONE_KEY_FILE_1,
     RCLONE_KEY_FILE_2,
 ];
@@ -86,15 +89,7 @@ const defaultPromptPassword = async () => {
     throw new Error("Password prompt handler is not configured");
 };
 export default class GoogleCryptoApi {
-    static _sharedState = {
-        promise: null,
-        seed: null,
-        created: false,
-        configId: null,
-        keyId: null,
-        key1Id: null,
-        key2Id: null,
-    };
+    static _sharedStore = new Map();
     constructor(driveApi, options = {}) {
         registerCfbSuite();
         this.drive = driveApi;
@@ -120,9 +115,31 @@ export default class GoogleCryptoApi {
         this._configCreatedOnce = false;
         this._seedPayload = null;
         this._configFilesPromise = null;
+        this._recoveringTmpKey = null;
+        this.storageKey = options.storageId || options.storageKey || driveApi?.rootId || "default";
+        this._getSharedState = () => {
+            const existing = GoogleCryptoApi._sharedStore.get(this.storageKey);
+            if (existing) return existing;
+            const fresh = {
+                promise: null,
+                seed: null,
+                created: false,
+                configId: null,
+                keyId: null,
+                key1Id: null,
+                key2Id: null,
+            };
+            GoogleCryptoApi._sharedStore.set(this.storageKey, fresh);
+            return fresh;
+        };
+        this._updateSharedState = (updates) => {
+            const merged = { ...this._getSharedState(), ...updates };
+            GoogleCryptoApi._sharedStore.set(this.storageKey, merged);
+            return merged;
+        };
 
         // hydrate from shared cache to avoid duplicate initialization across instances
-        const shared = GoogleCryptoApi._sharedState;
+        const shared = this._getSharedState();
         if (shared.seed) {
             this._seedPayload = shared.seed;
             this._configCreatedOnce = shared.created;
@@ -212,23 +229,50 @@ export default class GoogleCryptoApi {
         if (raw && typeof raw === "object" && "password" in raw) return raw.password;
         return raw;
     }
+    async recoverTempKeyIfPresent() {
+        if (this._recoveringTmpKey) {
+            return this._recoveringTmpKey;
+        }
+        this._recoveringTmpKey = (async () => {
+            const tmpMeta = await this.drive.findFileByName(TMP_KEY_FILE_NAME).catch(() => null);
+            if (!tmpMeta) return null;
+            const existingKey = await this.drive.findFileByName(KEY_FILE_NAME).catch(() => null);
+            if (existingKey?.id && existingKey.id !== tmpMeta.id) {
+                await this.drive.deleteFile(existingKey.id).catch(() => {});
+            }
+            await this.drive.renameFile(tmpMeta.id, KEY_FILE_NAME);
+            this._keyFileId = tmpMeta.id;
+            this._seedPayload = null;
+            this._updateSharedState({ seed: null, keyId: tmpMeta.id });
+            return tmpMeta;
+        })();
+        try {
+            return await this._recoveringTmpKey;
+        } finally {
+            this._recoveringTmpKey = null;
+        }
+    }
     async ensureConfigFiles() {
+        await this.recoverTempKeyIfPresent();
         if (this._seedPayload) {
             return this._seedPayload;
         }
-        if (GoogleCryptoApi._sharedState.seed) {
-            this._seedPayload = GoogleCryptoApi._sharedState.seed;
-            this._configCreatedOnce = GoogleCryptoApi._sharedState.created;
-            this._configFileId = GoogleCryptoApi._sharedState.configId;
-            this._keyFileId = GoogleCryptoApi._sharedState.keyId;
-            this._rcloneKey1Id = GoogleCryptoApi._sharedState.key1Id;
-            this._rcloneKey2Id = GoogleCryptoApi._sharedState.key2Id;
+        const sharedCached = this._getSharedState();
+        if (sharedCached.seed) {
+            this._seedPayload = sharedCached.seed;
+            this._configCreatedOnce = sharedCached.created;
+            this._configFileId = sharedCached.configId;
+            this._keyFileId = sharedCached.keyId;
+            this._rcloneKey1Id = sharedCached.key1Id;
+            this._rcloneKey2Id = sharedCached.key2Id;
             return this._seedPayload;
         }
         if (this._configFilesPromise) return this._configFilesPromise;
-        if (GoogleCryptoApi._sharedState.promise) return GoogleCryptoApi._sharedState.promise;
+        const sharedState = this._getSharedState();
+        if (sharedState.promise) return sharedState.promise;
 
-        this._configFilesPromise = GoogleCryptoApi._sharedState.promise = (async () => {
+        this._configFilesPromise = this._updateSharedState({
+            promise: (async () => {
             // 1) cached ids: no new uploads
             if (this._configCreatedOnce && this._configFileId && (this._keyFileId || this._rcloneKey1Id)) {
                 try {
@@ -254,7 +298,7 @@ export default class GoogleCryptoApi {
                             key1Meta: this._rcloneKey1Id ? { id: this._rcloneKey1Id } : null,
                             key2Meta: this._rcloneKey2Id ? { id: this._rcloneKey2Id } : null,
                         };
-                        GoogleCryptoApi._sharedState = {
+                        this._updateSharedState({
                             promise: null,
                             seed: this._seedPayload,
                             created: true,
@@ -262,7 +306,7 @@ export default class GoogleCryptoApi {
                             keyId: this._keyFileId,
                             key1Id: this._rcloneKey1Id,
                             key2Id: this._rcloneKey2Id,
-                        };
+                        });
                         return this._seedPayload;
                     }
                 } catch (e) {
@@ -288,7 +332,7 @@ export default class GoogleCryptoApi {
                 this._rcloneKey2Id = key2Meta?.id ?? this._rcloneKey2Id;
                 this._configCreatedOnce = true;
                 this._seedPayload = { configText, keyText, key1Text, key2Text, configMeta, keyMeta, key1Meta, key2Meta };
-                GoogleCryptoApi._sharedState = {
+                this._updateSharedState({
                     promise: null,
                     seed: this._seedPayload,
                     created: true,
@@ -296,7 +340,7 @@ export default class GoogleCryptoApi {
                     keyId: this._keyFileId,
                     key1Id: this._rcloneKey1Id,
                     key2Id: this._rcloneKey2Id,
-                };
+                });
                 return this._seedPayload;
             }
 
@@ -306,7 +350,7 @@ export default class GoogleCryptoApi {
                 throw new Error("Crypto configuration files are missing after initialization attempt");
             }
             this._configCreatedOnce = true;
-            GoogleCryptoApi._sharedState = {
+            this._updateSharedState({
                 promise: null,
                 seed: this._seedPayload,
                 created: true,
@@ -314,15 +358,16 @@ export default class GoogleCryptoApi {
                 keyId: this._keyFileId,
                 key1Id: this._rcloneKey1Id,
                 key2Id: this._rcloneKey2Id,
-            };
+            });
             return this._seedPayload;
-        })();
+            })(),
+        }).promise;
 
         try {
             return await this._configFilesPromise;
         } finally {
             this._configFilesPromise = null;
-            GoogleCryptoApi._sharedState.promise = null;
+            this._updateSharedState({ promise: null });
         }
     }
     async ensureConfigSeedCreated() {
@@ -336,7 +381,7 @@ export default class GoogleCryptoApi {
         this._configInitializationPromise = (async () => {
             const passwordResponse = await this.requestPassword({
                 reason: "setup",
-                message: "Create a password for file encryption",
+                message: t("password_prompt_setup_message", "Create a password for file encryption"),
                 confirm: true,
             });
             let rawPassword = passwordResponse;
@@ -452,33 +497,114 @@ export default class GoogleCryptoApi {
         }
         return String(result);
     }
-    async unlockEncryptedKey({ config, encryptedHex }) {
+    parseEncryptedKeyPayload(encryptedHex) {
         if (typeof encryptedHex !== "string" || !encryptedHex.trim()) {
             throw new Error("Encrypted key payload is missing");
         }
         const sanitized = encryptedHex.replace(/\s+/g, "");
         const payload = hexToBytes(sanitized);
-        if (payload.length <= SALT_BYTE_LENGTH + this.ivByteLength) {
+        const ivLength = this.ivByteLength || IV_BYTE_LENGTH;
+        if (payload.length <= SALT_BYTE_LENGTH + ivLength) {
             throw new Error("Encrypted key payload is too short");
         }
         const salt = payload.slice(0, SALT_BYTE_LENGTH);
         const ivStart = SALT_BYTE_LENGTH;
-        const ivEnd = ivStart + this.ivByteLength;
+        const ivEnd = ivStart + ivLength;
         const iv = payload.slice(ivStart, ivEnd);
         const ciphertext = payload.slice(ivEnd);
+        return { salt, iv, ciphertext };
+    }
+    async decryptOwnKeyWithPassword({ encryptedHex, config, password, payloadParts }) {
+        const normalizedPassword = typeof password === "string" ? password.trim() : "";
+        if (!normalizedPassword) {
+            const err = new Error("Password is required to unlock encryption key");
+            err.code = "PASSWORD_REQUIRED";
+            throw err;
+        }
+        const { salt, iv, ciphertext } = payloadParts ?? this.parseEncryptedKeyPayload(encryptedHex);
         const iterations = this.pickPbkdf2Iterations(config.pbkdf2Iterations);
         const hash = this.pickPbkdf2Hash(config.pbkdf2Hash);
         const keyLength = keyLengthForAlgorithm(config.encryptionAlgorithm);
+        try {
+            const derivedKey = await deriveKeyBytes({
+                password: normalizedPassword,
+                salt,
+                iterations,
+                hash,
+                length: keyLength,
+            });
+            const decrypted = await this.decryptBytesWithAlgorithm({
+                algorithm: config.encryptionAlgorithm,
+                key: derivedKey,
+                iv,
+                ciphertext,
+            });
+            const plain = bytesToUtf8(decrypted).replace(/\0+$/g, "");
+            if (!plain.endsWith(CONTROL_PHRASE)) {
+                throw new Error("CONTROL_MISMATCH");
+            }
+            const keyHex = plain.slice(0, -CONTROL_PHRASE.length).trim();
+            if (!/^[0-9a-fA-F]+$/.test(keyHex) || keyHex.length % 2 !== 0) {
+                throw new Error("DECRYPTED_KEY_INVALID");
+            }
+            return keyHex.toLowerCase();
+        } catch (err) {
+            const invalid =
+                err?.message === "CONTROL_MISMATCH" ||
+                err?.message === "DECRYPTED_KEY_INVALID" ||
+                err?.message === "Password is required to unlock encryption key";
+            if (invalid) {
+                const error = new Error("Invalid password");
+                error.code = "INVALID_PASSWORD";
+                throw error;
+            }
+            throw err;
+        }
+    }
+    async encryptOwnKeyWithPassword({ keyHex, config, password }) {
+        const normalizedPassword = typeof password === "string" ? password.trim() : "";
+        if (!normalizedPassword) {
+            const err = new Error("Password is required to encrypt key");
+            err.code = "PASSWORD_REQUIRED";
+            throw err;
+        }
+        const normalizedKey = typeof keyHex === "string" ? keyHex.trim().toLowerCase() : "";
+        if (!normalizedKey || !/^[0-9a-fA-F]+$/.test(normalizedKey) || normalizedKey.length % 2 !== 0) {
+            throw new Error("Invalid encryption key material");
+        }
+        const iterations = this.pickPbkdf2Iterations(config.pbkdf2Iterations);
+        const hash = this.pickPbkdf2Hash(config.pbkdf2Hash);
+        const keyLength = keyLengthForAlgorithm(config.encryptionAlgorithm);
+        const salt = this.generateRandomBytes(SALT_BYTE_LENGTH);
+        const derivedKey = await deriveKeyBytes({
+            password: normalizedPassword,
+            salt,
+            iterations,
+            hash,
+            length: keyLength,
+        });
+        const iv = this.generateRandomBytes(this.ivByteLength);
+        const payload = await this.encryptBytesWithAlgorithm({
+            algorithm: config.encryptionAlgorithm,
+            key: derivedKey,
+            iv,
+            plaintext: utf8ToBytes(normalizedKey + CONTROL_PHRASE),
+        });
+        return bytesToHex(concatBytes(salt, iv, payload));
+    }
+    async unlockEncryptedKey({ config, encryptedHex }) {
+        const payloadParts = this.parseEncryptedKeyPayload(encryptedHex);
         let attempt = 0;
-        const MAX_ATTEMPTS = 3;
+        const MAX_ATTEMPTS = 10;
         while (true) {
             const rawPassword = await this.requestPassword({
                 reason: "unlock",
                 attempt,
                 message:
                     attempt > 0
-                        ? "Incorrect password. Try again."
-                        : "Enter the password to unlock the encryption key.",
+                        ? t("password_prompt_message_retry", "Incorrect password. Try again.")
+                        : t("password_prompt_message_default", "Enter the password to unlock the encryption key."),
+                forcePrompt: attempt > 0,
             });
             const extracted = this.extractPasswordValue(rawPassword);
             if (extracted === null || typeof extracted === "undefined") {
@@ -493,34 +619,18 @@ export default class GoogleCryptoApi {
                 continue;
             }
             try {
-                const derivedKey = await deriveKeyBytes({
+                const keyHex = await this.decryptOwnKeyWithPassword({
+                    encryptedHex,
+                    config,
                     password: trimmedPassword,
-                    salt,
-                    iterations,
-                    hash,
-                    length: keyLength,
+                    payloadParts,
                 });
-                console.debug("[Crypto] derived PBKDF2 key:", bytesToHex(derivedKey).toLowerCase());
-                const decrypted = await this.decryptBytesWithAlgorithm({
-                    algorithm: config.encryptionAlgorithm,
-                    key: derivedKey,
-                    iv,
-                    ciphertext,
-                });
-                const plain = bytesToUtf8(decrypted).replace(/\0+$/g, "");
-                if (!plain.endsWith(CONTROL_PHRASE)) {
-                    throw new Error("CONTROL_MISMATCH");
-                }
-                    const keyHex = plain.slice(0, -CONTROL_PHRASE.length).trim();
-                    if (!/^[0-9a-fA-F]+$/.test(keyHex) || keyHex.length % 2 !== 0) {
-                        throw new Error("DECRYPTED_KEY_INVALID");
-                    }
-                    console.debug("[Crypto] decrypted key:", keyHex.toLowerCase());
-                    return { ...config, key: keyHex.toLowerCase() };
+                console.debug("[Crypto] decrypted key:", keyHex);
+                return { ...config, key: keyHex };
             } catch (err) {
                 attempt += 1;
                 if (attempt >= MAX_ATTEMPTS) {
-                    throw err instanceof Error && err.message !== "CONTROL_MISMATCH"
+                    throw err instanceof Error && err.code !== "INVALID_PASSWORD"
                         ? err
                         : new Error("Too many failed password attempts");
                 }
@@ -541,15 +651,16 @@ export default class GoogleCryptoApi {
         const normalizedDirectoryEncryption = this.normalizeDirectoryNameEncryption(
             config.directoryNameEncryption
         );
-        const MAX_ATTEMPTS = 3;
+        const MAX_ATTEMPTS = 10;
         while (true) {
             const rawPassword = await this.requestPassword({
                 reason: "unlock",
                 attempt,
                 message:
                     attempt > 0
-                        ? "Incorrect password. Try again."
-                        : "Enter the password to unlock the encryption key.",
+                        ? t("password_prompt_message_retry", "Incorrect password. Try again.")
+                        : t("password_prompt_message_default", "Enter the password to unlock the encryption key."),
+                forcePrompt: attempt > 0,
             });
             const extracted = this.extractPasswordValue(rawPassword);
             if (extracted === null || typeof extracted === "undefined") {
@@ -826,7 +937,7 @@ export default class GoogleCryptoApi {
             key1Meta: null,
             key2Meta: null,
         };
-        GoogleCryptoApi._sharedState = {
+        this._updateSharedState({
             promise: null,
             seed: this._seedPayload,
             created: true,
@@ -834,7 +945,7 @@ export default class GoogleCryptoApi {
             keyId: this._keyFileId,
             key1Id: this._rcloneKey1Id,
             key2Id: this._rcloneKey2Id,
-        };
+        });
         this.currentConfig = { ...normalized, key: fileKeyHex.toLowerCase() };
         this.cryptoMode = this.normalizeCryptoMode(normalized.mode);
         this.ivByteLength = IV_BYTE_LENGTH;
@@ -851,6 +962,74 @@ export default class GoogleCryptoApi {
             key2Meta: null,
         };
         return this.currentConfig;
+    }
+    async changeEncryptionPassword({ currentPassword, newPassword }) {
+        await this.ensureConfigLoaded();
+        const mode = this.normalizeCryptoMode(this.getCryptoMode());
+        if (mode !== CRYPTO_MODE_OWN) {
+            throw new Error("Смена пароля доступна только для собственного режима шифрования");
+        }
+        const oldPwd = typeof currentPassword === "string" ? currentPassword.trim() : "";
+        const nextPwd = typeof newPassword === "string" ? newPassword.trim() : "";
+        if (!oldPwd || !nextPwd) {
+            throw new Error("Укажите текущий и новый пароль");
+        }
+        await this.recoverTempKeyIfPresent();
+        const keyMeta = await this.drive.findFileByName(KEY_FILE_NAME);
+        if (!keyMeta?.id) {
+            throw new Error("Не удалось найти файл .key");
+        }
+        const encryptedKeyHex = await this.drive.downloadSmallFile(keyMeta.id, { responseType: "text" });
+        const payloadParts = this.parseEncryptedKeyPayload(encryptedKeyHex);
+        const keyHex = await this.decryptOwnKeyWithPassword({
+            encryptedHex: encryptedKeyHex,
+            config: this.currentConfig,
+            password: oldPwd,
+            payloadParts,
+        });
+        const newPayloadHex = await this.encryptOwnKeyWithPassword({
+            keyHex,
+            config: this.currentConfig,
+            password: nextPwd,
+        });
+        const tmpMeta = await this.createOrUpdateTextFile({
+            name: TMP_KEY_FILE_NAME,
+            data: newPayloadHex,
+            mimeType: "text/plain",
+        });
+        try {
+            await this.drive.deleteFile(keyMeta.id);
+        } catch (err) {
+            if (err?.status !== 404) {
+                throw err;
+            }
+        }
+        await this.drive.renameFile(tmpMeta.id, KEY_FILE_NAME);
+        this._keyFileId = tmpMeta.id;
+        const nextSeed = {
+            ...(this._seedPayload || {}),
+            keyText: newPayloadHex,
+            keyMeta: { id: tmpMeta.id },
+        };
+        if (!nextSeed.configText && this.currentConfig) {
+            nextSeed.configText = serializeConfig(this.currentConfig);
+        }
+        if (!nextSeed.configMeta && this._configFileId) {
+            nextSeed.configMeta = { id: this._configFileId };
+        }
+        this._seedPayload = nextSeed;
+        this._updateSharedState({
+            promise: null,
+            seed: nextSeed,
+            created: true,
+            configId: this._configFileId,
+            keyId: this._keyFileId,
+            key1Id: this._rcloneKey1Id,
+            key2Id: this._rcloneKey2Id,
+        });
+        this._oneTimeUnlockPassword = nextPwd;
+        this._skipUnlockNext = true;
+        return true;
     }
     normalizeFilenameEncryptionOption(value) {
         const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -938,7 +1117,7 @@ export default class GoogleCryptoApi {
             key1Meta,
             key2Meta,
         };
-        GoogleCryptoApi._sharedState = {
+        this._updateSharedState({
             promise: null,
             seed: this._seedPayload,
             created: true,
@@ -946,7 +1125,7 @@ export default class GoogleCryptoApi {
             keyId: this._keyFileId,
             key1Id: this._rcloneKey1Id,
             key2Id: this._rcloneKey2Id,
-        };
+        });
         this.currentConfig = {
             ...normalized,
             key: combinedKey.toLowerCase(),

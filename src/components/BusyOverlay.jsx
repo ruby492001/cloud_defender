@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useMemo, useState } from "react";
+import { t } from "../strings.js";
 
 const BusyContext = createContext(null);
 
@@ -37,7 +38,7 @@ export function BusyProvider({ children }) {
                 <div style={overlayStyles.backdrop}>
                     <div style={overlayStyles.spinner}>
                         <div style={overlayStyles.loader} />
-                        <div style={{ marginTop: 12, fontSize: 16 }}>Please wait…</div>
+                        <div style={{ marginTop: 12, fontSize: 16 }}>{t("busy_overlay_wait", "Please wait…")}</div>
                     </div>
                 </div>
             )}

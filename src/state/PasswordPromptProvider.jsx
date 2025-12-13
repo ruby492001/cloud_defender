@@ -13,6 +13,7 @@ import {
     DEFAULT_FILENAME_ENCRYPTION,
     DEFAULT_DIRECTORY_NAME_ENCRYPTION,
 } from "../crypto/config.js";
+import { t } from "../strings.js";
 
 const sessionPasswordCache = new Map();
 const PasswordPromptContext = createContext(null);
@@ -134,32 +135,32 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
     const needsConfirmation = !!options.confirm;
     const message =
         attempt > 0
-            ? options.message || "Incorrect password. Try again."
-            : options.initialMessage || options.message || "Enter the password";
+            ? options.message || t("password_prompt_message_retry")
+            : options.initialMessage || options.message || t("password_prompt_message_default");
     const title =
         options.title ||
         (options.reason === "setup"
-            ? "Create Password"
+            ? t("password_prompt_title_setup")
             : options.reason === "unlock"
-            ? "Password Required"
-            : "Password");
+            ? t("password_prompt_title_unlock")
+            : t("password_prompt_title_default"));
     const errorMessage = localError || options.errorMessage || "";
 
     const handleSubmit = (event) => {
         event.preventDefault();
         const trimmed = value.trim();
         if (!trimmed) {
-            setLocalError("Password cannot be empty");
+            setLocalError(t("password_prompt_empty"));
             return;
         }
         if (needsConfirmation && trimmed !== confirmValue.trim()) {
-            setLocalError("Passwords do not match");
+            setLocalError(t("password_prompt_confirm_mismatch"));
             return;
         }
         const normalizedMode = mode === "rclone" ? "rclone" : "own";
         if (normalizedMode === "rclone") {
             if (!rclonePassword.trim()) {
-                setLocalError("Primary rclone password is required");
+                setLocalError(t("password_prompt_primary_required"));
                 return;
             }
         }
@@ -193,7 +194,7 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                 <form onSubmit={handleSubmit} style={overlayStyles.form}>
                     {options.reason === "setup" && (
                         <label style={overlayStyles.label}>
-                            Encryption mode
+                            {t("password_prompt_encryption_mode", "Encryption mode")}
                             <select
                                 value={mode}
                                 onChange={(e) => {
@@ -202,14 +203,14 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                                 }}
                                 style={overlayStyles.select}
                             >
-                                <option value="own">Client-side encryption</option>
+                                <option value="own">{t("password_prompt_mode_own", "Client-side encryption")}</option>
                                 <option value="rclone">rclone</option>
                             </select>
                         </label>
                     )}
 
                     <label style={overlayStyles.label}>
-                        Password
+                        {t("password_prompt_password_label")}
                         <div style={overlayStyles.inputRow}>
                             <input
                                 type={showPassword ? "text" : "password"}
@@ -217,34 +218,34 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                                 autoFocus
                                 onChange={(e) => setValue(e.target.value)}
                                 style={overlayStyles.input}
-                                placeholder="Enter password"
+                                placeholder={t("password_prompt_placeholder", "Enter password")}
                             />
                             <button
                                 type="button"
                                 style={overlayStyles.toggle}
                                 onClick={() => setShowPassword((flag) => !flag)}
                             >
-                                {showPassword ? "Hide" : "Show"}
+                                {showPassword ? t("password_prompt_hide", "Hide") : t("password_prompt_show", "Show")}
                             </button>
                         </div>
                     </label>
 
                     {needsConfirmation && (
                         <label style={overlayStyles.label}>
-                            Confirm password
+                            {t("password_prompt_confirm_label")}
                             <input
                                 type={showPassword ? "text" : "password"}
                                 value={confirmValue}
                                 onChange={(e) => setConfirmValue(e.target.value)}
                                 style={overlayStyles.input}
-                                placeholder="Repeat password"
+                                placeholder={t("password_prompt_repeat_placeholder", "Repeat password")}
                             />
                         </label>
                     )}
                     {options.reason === "setup" && mode === "own" && (
                         <>
                             <label style={overlayStyles.label}>
-                                Encryption algorithm
+                                {t("password_prompt_encryption_algorithm", "Encryption algorithm")}
                                 <select
                                     value={encryptionAlgorithm}
                                     onChange={(e) => setEncryptionAlgorithm(e.target.value)}
@@ -258,7 +259,7 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                                 </select>
                             </label>
                             <label style={overlayStyles.label}>
-                                Hash algorithm
+                                {t("password_prompt_hash_algorithm", "Hash algorithm")}
                                 <select
                                     value={hashAlgorithm}
                                     onChange={(e) => setHashAlgorithm(e.target.value)}
@@ -276,46 +277,46 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
                     {options.reason === "setup" && mode === "rclone" && (
                         <>
                             <label style={overlayStyles.label}>
-                                How to encrypt the filenames.
+                                {t("password_prompt_filename_title", "How to encrypt the filenames.")}
                                 <select
                                     value={rcloneFilenameEncryption}
                                     onChange={(e) => setRcloneFilenameEncryption(e.target.value)}
                                     style={overlayStyles.select}
                                 >
-                                    <option value="standard">Encrypt the filenames</option>
-                                    <option value="obfuscate">Very simple filename obfuscation</option>
-                                    <option value="off">Don't encrypt the file names</option>
+                                    <option value="standard">{t("password_prompt_filename_encrypt", "Encrypt the filenames")}</option>
+                                    <option value="obfuscate">{t("password_prompt_filename_obfuscate", "Very simple filename obfuscation")}</option>
+                                    <option value="off">{t("password_prompt_filename_off", "Don't encrypt the file names")}</option>
                                 </select>
                             </label>
                             <label style={overlayStyles.label}>
-                                Encrypt directory name
+                                {t("password_prompt_direnc_title", "Encrypt directory name")}
                                 <select
                                     value={rcloneDirectoryEncryption}
                                     onChange={(e) => setRcloneDirectoryEncryption(e.target.value)}
                                     style={overlayStyles.select}
                                 >
-                                    <option value="true">Encrypt directory names</option>
-                                    <option value="false">Don't encrypt directory names, leave them intact.</option>
+                                    <option value="true">{t("password_prompt_direnc_on", "Encrypt directory names")}</option>
+                                    <option value="false">{t("password_prompt_direnc_off", "Don't encrypt directory names, leave them intact.")}</option>
                                 </select>
                             </label>
                             <label style={overlayStyles.label}>
-                                password
+                                {t("password_prompt_primary_label", "password")}
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     value={rclonePassword}
                                     onChange={(e) => setRclonePassword(e.target.value)}
                                     style={overlayStyles.input}
-                                    placeholder="password from rclone config"
+                                    placeholder={t("password_prompt_primary_placeholder", "password from rclone config")}
                                 />
                             </label>
                             <label style={overlayStyles.label}>
-                                password2 (optional)
+                                {t("password_prompt_secondary_label", "password2 (optional)")}
                                 <input
                                     type={showPassword ? "text" : "password"}
                                     value={rclonePassword2}
                                     onChange={(e) => setRclonePassword2(e.target.value)}
                                     style={overlayStyles.input}
-                                    placeholder="password2 from rclone config (optional)"
+                                    placeholder={t("password_prompt_secondary_placeholder", "password2 from rclone config (optional)")}
                                 />
                             </label>
                         </>
@@ -325,10 +326,10 @@ function PasswordPromptDialog({ request, onSubmit, onCancel }) {
 
                     <div style={overlayStyles.actions}>
                         <button type="button" style={overlayStyles.secondary} onClick={onCancel}>
-                            Cancel
+                            {t("password_prompt_cancel")}
                         </button>
                         <button type="submit" style={overlayStyles.primary}>
-                            Continue
+                            {t("password_prompt_continue")}
                         </button>
                     </div>
                 </form>

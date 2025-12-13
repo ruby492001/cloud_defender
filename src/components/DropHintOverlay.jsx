@@ -1,5 +1,6 @@
 // src/components/DropHintOverlay.jsx
 import React from "react";
+import { t } from "../strings.js";
 
 export default function DropHintOverlay({ visible = false }) {
     if (!visible) return null;
@@ -36,7 +37,7 @@ export default function DropHintOverlay({ visible = false }) {
                     color: "#334155",
                 }}
             >
-                Отпусти файлы или папки, чтобы загрузить в Google Drive
+                {t("drop_hint")}
             </div>
         </div>
     );

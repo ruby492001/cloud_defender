@@ -1,14 +1,17 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { t } from "../strings.js";
 
-const arrowUpIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'><path d='M12 4l7 7h-4v9h-6v-9H5z'/></svg>";
-const arrowDownIcon = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2322c55e'><path d='M12 20l-7-7h4V4h6v9h4z'/></svg>";
+const arrowUpIcon =
+    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'><path d='M12 4l7 7h-4v9h-6v-9H5z'/></svg>";
+const arrowDownIcon =
+    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2322c55e'><path d='M12 20l-7-7h4V4h6v9h4z'/></svg>";
 
 const styles = {
     container: {
         position: "fixed",
         right: 16,
         bottom: 16,
-        width: 420,
+        width: 520,
         maxWidth: "calc(100vw - 24px)",
         maxHeight: "70vh",
         overflowY: "auto",
@@ -28,7 +31,7 @@ const styles = {
         position: "fixed",
         right: 16,
         bottom: 16,
-        width: 280,
+        width: 360,
         maxWidth: "calc(100vw - 24px)",
         background: "#0f172a",
         border: "1px solid #263244",
@@ -53,7 +56,8 @@ const styles = {
         display: "flex",
         alignItems: "center",
         gap: 8,
-    },    header: {
+    },
+    header: {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
@@ -88,6 +92,11 @@ const styles = {
         display: "flex",
         alignItems: "center",
         gap: 8,
+        flexWrap: "nowrap",
+    },
+    wideButton: {
+        minWidth: 170,
+        justifyContent: "center",
     },
     icon: {
         width: 18,
@@ -191,15 +200,15 @@ function formatEta(seconds) {
     const minutes = Math.floor((total % 3600) / 60);
     const secs = total % 60;
     const parts = [];
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0) parts.push(`${minutes}m`);
+    if (hours > 0) parts.push(`${hours}ч`);
+    if (minutes > 0) parts.push(`${minutes}м`);
     if (parts.length < 2 && hours === 0 && secs > 0) {
-        parts.push(`${secs}s`);
+        parts.push(`${secs}с`);
     }
     if (parts.length === 0) {
-        parts.push(`${secs}s`);
+        parts.push(`${secs}с`);
     }
-    return `~${parts.join(" ")}`;
+    return parts.join(" ");
 }
 
 function computeGroupEta(tasks) {
@@ -217,32 +226,32 @@ const noop = () => {};
 const uploadStatusLabel = (status) => {
     switch (status) {
         case "queued":
-            return "Queued";
+            return t("upload_overlay_queue");
         case "init":
-            return "Preparing";
+            return t("upload_overlay_init");
         case "uploading":
-            return "Uploading";
+            return t("upload_overlay_uploading");
         case "done":
-            return "Done";
+            return t("upload_overlay_done");
         case "cancelled":
-            return "Canceled";
+            return t("upload_overlay_cancelled");
         default:
-            return "Error";
+            return t("upload_overlay_error");
     }
 };
 
 const downloadStatusLabel = (status) => {
     switch (status) {
         case "queued":
-            return "Queued";
+            return t("upload_overlay_queue");
         case "running":
-            return "Downloading";
+            return t("upload_overlay_uploading");
         case "done":
-            return "Done";
+            return t("upload_overlay_done");
         case "canceled":
-            return "Canceled";
+            return t("upload_overlay_cancelled");
         default:
-            return "Error";
+            return t("upload_overlay_error");
     }
 };
 
@@ -274,7 +283,6 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         onClearFinished = noop,
         onHide = noop,
     } = downloads;
-    const { onUploadDone = noop } = uploads;
 
     const containerRef = useRef(null);
     const scrollSnapshot = useRef(0);
@@ -294,6 +302,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         });
         return map;
     }, [uploadTasks]);
+
     const groupEtaMap = useMemo(() => {
         const map = new Map();
         groupedUploadTasks.forEach((tasks, groupId) => {
@@ -304,6 +313,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         });
         return map;
     }, [groupedUploadTasks]);
+
     const groupProgressMap = useMemo(() => {
         const stats = new Map();
         uploadGroups.forEach((group) => {
@@ -330,7 +340,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                 entry.uploadedBytes += uploadedBytes;
             }
         });
-        stats.forEach((entry, id) => {
+        stats.forEach((entry) => {
             if (entry.totalBytes > 0) {
                 entry.percent = Math.min(100, Math.round((entry.uploadedBytes / entry.totalBytes) * 100));
             }
@@ -343,21 +353,10 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
 
     const totalItems = soloUploadTasks.length + uploadGroups.length + downloadTasks.length;
     const activeUploadTasks = soloUploadTasks.filter((t) => !["done", "cancelled", "error"].includes(t.status)).length;
-    const activeUploadGroups = uploadGroups.filter((g) => (g.done + g.failed + g.cancelled) < g.total).length;
+    const activeUploadGroups = uploadGroups.filter((g) => g.done + g.failed + g.cancelled < g.total).length;
     const activeDownloadTasks = downloadTasks.filter((t) => !["done", "canceled", "error"].includes(t.status)).length;
     const activeTransfers = activeUploadTasks + activeUploadGroups + activeDownloadTasks;
     const canDismiss = activeTransfers === 0;
-
-
-    const fingerprint = useMemo(
-        () =>
-            JSON.stringify({
-                ug: uploadGroups.map(({ id, percent, done, failed, cancelled, total }) => [id, percent, done, failed, cancelled, total]),
-                ut: uploadTasks.map(({ id, status, percent, error }) => [id, status, percent, Boolean(error)]),
-                dt: downloadTasks.map(({ id, status, progress, error }) => [id, status, progress, Boolean(error)]),
-            }),
-        [uploadGroups, uploadTasks, downloadTasks],
-    );
 
     useLayoutEffect(() => {
         const el = containerRef.current;
@@ -370,7 +369,11 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         return () => el.removeEventListener("scroll", handle);
     }, []);
 
-    const summaryLabel = activeTransfers > 0 ? `${activeTransfers} active` : `${totalItems} items`;
+    const summaryLabel =
+        activeTransfers > 0
+            ? t("transfer_summary_active").replace("{count}", String(activeTransfers))
+            : t("transfer_summary_total").replace("{count}", String(totalItems));
+
     const handleDismiss = () => {
         onClose?.();
         onHide?.();
@@ -393,7 +396,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                 }}
             >
                 <div style={styles.collapsedSummary}>
-                    <span>Transfers</span>
+                    <span>{t("transfer_title")}</span>
                     <span style={{ color: "#94a3b8" }}>{summaryLabel}</span>
                 </div>
                 <div style={styles.collapsedActions}>
@@ -404,9 +407,9 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                             e.stopPropagation();
                             setCollapsed(false);
                         }}
-                        aria-label="Expand transfers"
+                        aria-label={t("transfer_expand")}
                     >
-                        ▲
+                        &gt;
                     </button>
                     <button
                         className="btn ghost"
@@ -417,9 +420,9 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                             if (!canDismiss) return;
                             handleDismiss();
                         }}
-                        aria-label="Close transfers"
+                        aria-label={t("transfer_close")}
                     >
-                        ✕
+                        ×
                     </button>
                 </div>
             </div>
@@ -430,13 +433,12 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
         <div ref={containerRef} style={styles.container}>
             <div style={styles.header}>
                 <div>
-                    <div style={styles.headerTitle}>File Transfers</div>
-                    <div style={styles.headerCaption}>Uploads to Drive and downloads to this device</div>
+                    <div style={styles.headerTitle}>{t("transfer_header_title")}</div>
                 </div>
                 <div style={styles.collapsedActions}>
                     <div style={{ fontSize: 12, color: "#94a3b8" }}>{summaryLabel}</div>
                     <button className="btn ghost" type="button" onClick={() => setCollapsed(true)}>
-                        Collapse
+                        {t("transfer_collapse")}
                     </button>
                     <button
                         className="btn ghost"
@@ -447,7 +449,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                             handleDismiss();
                         }}
                     >
-                        Close
+                        {t("transfer_close")}
                     </button>
                 </div>
             </div>
@@ -456,13 +458,13 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                 <div style={styles.section}>
                     <div style={styles.sectionHeader}>
                         <div style={styles.sectionTitle}>
-                            <img alt="Upload indicator" src={arrowUpIcon} style={styles.icon} />
-                            <span>Uploads</span>
+                            <img alt={t("upload_overlay_uploading")} src={arrowUpIcon} style={styles.icon} />
+                            <span>{t("transfer_uploads")}</span>
                         </div>
                         <div style={styles.sectionActions}>
                             {uploadsAllDone && (
                                 <button className="btn ghost" onClick={onClose}>
-                                    Hide
+                                    {t("transfer_hide")}
                                 </button>
                             )}
                         </div>
@@ -473,23 +475,23 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                         const finished = done + failed + cancelled;
                         let label;
                         if (finished < total) {
-                            label = "In progress";
-                        } else if (failed > 0 && done === 0) {
-                            label = "Failed";
+                            label = t("transfer_label_in_progress");
+                        } else if (failed > 0 && done === 0 && cancelled === 0) {
+                            label = t("transfer_label_failed");
                         } else if (failed > 0) {
-                            label = "Partially done";
+                            label = t("transfer_label_partial_done");
                         } else if (cancelled === total) {
-                            label = "Canceled";
+                            label = t("transfer_label_cancelled");
                         } else if (cancelled > 0 && done > 0) {
-                            label = "Partially canceled";
+                            label = t("transfer_label_partial_cancel");
                         } else {
-                            label = "Done";
+                            label = t("transfer_label_done");
                         }
 
                         const barStyle = {
                             ...styles.progressFill,
                             width: "0%",
-                            background: failed > 0 ? "#facc15" : barColor(label === "Done" ? "done" : "uploading", "upload"),
+                            background: failed > 0 ? "#facc15" : barColor(label === t("transfer_label_done") ? "done" : "uploading", "upload"),
                         };
                         const groupFinished = finished >= total && total > 0;
                         const progressEntry = groupProgressMap.get(id);
@@ -499,14 +501,14 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                         const groupEtaLabel = formatEta(groupEtaSeconds);
                         const hasByteStats = (progressEntry?.totalBytes ?? 0) > 0;
 
-                        const rawGroupName = name || "Upload batch";
+                        const rawGroupName = name || t("transfer_group_default");
                         const displayGroupName = truncateName(rawGroupName);
 
                         return (
                             <div key={id || `group-${name}`} style={styles.groupCard}>
                                 <div style={styles.row}>
                                     <div style={styles.taskMain}>
-                                        <img alt="Upload group" src={arrowUpIcon} style={styles.icon} />
+                                        <img alt={t("upload_overlay_folder_label")} src={arrowUpIcon} style={styles.icon} />
                                         <div style={styles.name} title={rawGroupName}>
                                             {displayGroupName}
                                         </div>
@@ -517,19 +519,36 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                 </div>
                                 <div style={styles.meta}>
                                     <span>
-                                        Files {done}/{total}
+                                        {t("transfer_meta_files")
+                                            .replace("{done}", String(done))
+                                            .replace("{total}", String(total))}
                                     </span>
-                                    {hasByteStats && <span>Progress {computedPercent}%</span>}
-                                    {groupEtaLabel && <span>ETA {groupEtaLabel}</span>}
-                                    {failed > 0 && <span style={styles.error}>Errors {failed}</span>}
-                                    {cancelled > 0 && <span>Canceled {cancelled}</span>}
+                                    {hasByteStats && (
+                                        <span>
+                                            {t("transfer_meta_progress").replace(
+                                                "{percent}",
+                                                String(computedPercent)
+                                            )}
+                                        </span>
+                                    )}
+                                    {groupEtaLabel && (
+                                        <span>{t("transfer_meta_eta").replace("{eta}", groupEtaLabel)}</span>
+                                    )}
+                                    {failed > 0 && (
+                                        <span style={styles.error}>
+                                            {t("transfer_meta_errors").replace("{count}", String(failed))}
+                                        </span>
+                                    )}
+                                    {cancelled > 0 && (
+                                        <span>{t("transfer_meta_cancelled").replace("{count}", String(cancelled))}</span>
+                                    )}
                                 </div>
                                 <div style={styles.progress}>
                                     <div style={barStyle} />
                                 </div>
                                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                                     <button className="btn ghost" type="button" onClick={() => onCancelGroup(id)}>
-                                        Cancel
+                                        {t("action_cancel")}
                                     </button>
                                     <button
                                         className="btn secondary"
@@ -540,7 +559,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                             onRemoveGroup(id);
                                         }}
                                     >
-                                        Remove
+                                        {t("action_remove")}
                                     </button>
                                 </div>
                             </div>
@@ -549,7 +568,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
 
                     {soloUploadTasks.map((task) => {
                         const { id, name, status, percent = 0, error, etaSeconds } = task;
-                        const rawName = name || "Untitled";
+                        const rawName = name || t("transfer_task_untitled");
                         const displayName = truncateName(rawName);
                         const canCancel = ["queued", "init", "uploading"].includes(status);
                         const canRemove = ["done", "cancelled", "error"].includes(status);
@@ -559,7 +578,7 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                             <div key={id} style={styles.taskCard}>
                                 <div style={styles.row}>
                                     <div style={styles.taskMain}>
-                                        <img alt="Upload task" src={arrowUpIcon} style={styles.icon} />
+                                        <img alt={t("upload_overlay_uploading")} src={arrowUpIcon} style={styles.icon} />
                                         <div style={styles.name} title={rawName}>
                                             {displayName}
                                         </div>
@@ -581,20 +600,21 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                 </div>
                                 <div style={styles.meta}>
                                     <span>
-                                        {uploadStatusLabel(status)} - {safePercent}%
+                                        {uploadStatusLabel(status)} -{" "}
+                                        {t("transfer_meta_progress").replace("{percent}", String(safePercent))}
                                     </span>
-                                    {etaLabel && <span>ETA {etaLabel}</span>}
+                                    {etaLabel && <span>{t("transfer_meta_eta").replace("{eta}", etaLabel)}</span>}
                                     {error && <span style={styles.error}>{error}</span>}
                                 </div>
                                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                                     {canCancel && (
                                         <button className="btn ghost" type="button" onClick={() => onCancelTask(id)}>
-                                            Cancel
+                                            {t("action_cancel")}
                                         </button>
                                     )}
                                     {canRemove && (
                                         <button className="btn secondary" type="button" onClick={() => onRemoveTask(id)}>
-                                            Remove
+                                            {t("action_remove")}
                                         </button>
                                     )}
                                 </div>
@@ -610,34 +630,39 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                 <div style={styles.section}>
                     <div style={styles.sectionHeader}>
                         <div style={styles.sectionTitle}>
-                            <img alt="Download indicator" src={arrowDownIcon} style={styles.icon} />
-                            <span>Downloads</span>
+                            <img alt={t("menu_download")} src={arrowDownIcon} style={styles.icon} />
+                            <span>{t("transfer_downloads")}</span>
                         </div>
                         <div style={styles.sectionActions}>
                             <button className="btn ghost" type="button" onClick={onClearFinished}>
-                                Clear finished
+                                {t("transfer_clear_finished")}
                             </button>
                             <button className="btn ghost" type="button" onClick={onHide}>
-                                Hide
+                                {t("transfer_hide")}
                             </button>
                         </div>
                     </div>
 
                     {downloadTasks.map((task) => {
                         const { id, name, progress = 0, status, kind, error, etaSeconds, integrityCorrupted } = task;
-                        const rawName = name || "Untitled";
+                        const rawName = name || t("transfer_task_untitled");
                         const displayName = truncateName(rawName);
-                        const subtitle = kind === "folder" ? "Folder (zip)" : "File";
+                        const subtitle =
+                            kind === "folder"
+                                ? t("transfer_subtitle_folder")
+                                : t("transfer_subtitle_file");
                         const canCancel = status === "running";
                         const canRemove = ["error", "canceled", "done"].includes(status);
                         const safeProgress = Math.min(100, Math.max(0, progress || 0));
                         const etaLabel = formatEta(etaSeconds);
-                        const errorMessage = integrityCorrupted ? "Data integrity corrupted" : error;
+                        const errorMessage = integrityCorrupted
+                            ? t("transfer_integrity_error")
+                            : error;
                         return (
                             <div key={id} style={styles.taskCard}>
                                 <div style={styles.row}>
                                     <div style={styles.taskMain}>
-                                        <img alt="Download task" src={arrowDownIcon} style={styles.icon} />
+                                        <img alt={t("menu_download")} src={arrowDownIcon} style={styles.icon} />
                                         <div style={styles.name} title={rawName}>
                                             {displayName}
                                         </div>
@@ -663,19 +688,23 @@ export default function TransferTray({ uploads = {}, downloads = {} }) {
                                 </div>
                                 <div style={styles.meta}>
                                     <span>
-                                        {downloadStatusLabel(status)} - {safeProgress}%
+                                        {downloadStatusLabel(status)} -{" "}
+                                        {t("transfer_meta_progress").replace(
+                                            "{percent}",
+                                            String(safeProgress)
+                                        )}
                                     </span>
-                                    {etaLabel && <span>ETA {etaLabel}</span>}
+                                    {etaLabel && <span>{t("transfer_meta_eta").replace("{eta}", etaLabel)}</span>}
                                 </div>
                                 <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                                     {canCancel && (
                                         <button className="btn ghost" type="button" onClick={() => onCancel(id)}>
-                                            Cancel
+                                            {t("action_cancel")}
                                         </button>
                                     )}
                                     {canRemove && (
                                         <button className="btn secondary" type="button" onClick={() => onRemove(id)}>
-                                            Remove
+                                            {t("action_remove")}
                                         </button>
                                     )}
                                 </div>

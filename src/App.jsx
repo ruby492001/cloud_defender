@@ -22,7 +22,9 @@ import AddStorageModal from "./components/AddStorageModal.jsx";
 import StorageMenu from "./components/StorageMenu.jsx";
 import StorageSelectModal from "./components/StorageSelectModal.jsx";
 import { createStorage, fetchStorages, logout as logoutApi, refreshStorage, deleteStorage } from "./api/storages.js";
+import { changePassword, fetchDesktopClient } from "./api/auth.js";
 import { DriveApi } from "./api/drive.js";
+import { t } from "./strings.js";
 
 const AUTH_STORAGE_KEY = "cloud-defender-auth";
 const rootResolutionCache = new Map();
@@ -49,9 +51,48 @@ function AppContent({
         onLogout?.();
     }, [clearPasswordCache, cancelPendingPrompt, onLogout]);
     const { prompt, confirm } = useDialog();
+    const [rcloneModal, setRcloneModal] = useState({ open: false, data: null, loading: false, error: "" });
+    const [pwdModal, setPwdModal] = useState({
+        open: false,
+        loading: false,
+        error: "",
+        current: "",
+        next: "",
+        confirm: "",
+    });
+    const [storagePwdModal, setStoragePwdModal] = useState({
+        open: false,
+        loading: false,
+        error: "",
+        current: "",
+        next: "",
+        confirm: "",
+    });
     const [creatingStorage, setCreatingStorage] = useState(false);
     const handleStorageInitStart = useCallback(() => setCreatingStorage(true), []);
     const handleStorageInitFinish = useCallback(() => setCreatingStorage(false), []);
+
+    const handleChangePassword = useCallback(() => {
+        setPwdModal({ open: true, loading: false, error: "", current: "", next: "", confirm: "" });
+    }, []);
+    const handleChangeStoragePassword = useCallback(() => {
+        setStoragePwdModal({ open: true, loading: false, error: "", current: "", next: "", confirm: "" });
+    }, []);
+
+    const handleExportRcloneKeys = useCallback(async () => {
+        setRcloneModal({ open: true, data: null, loading: true, error: "" });
+        try {
+            const data = await fetchDesktopClient();
+            setRcloneModal({ open: true, data, loading: false, error: "" });
+        } catch (e) {
+            setRcloneModal({
+                open: true,
+                data: null,
+                loading: false,
+                error: e?.message || t("rclone_error"),
+            });
+        }
+    }, []);
 
     const drive = useDrive(driveToken, {
         requestPassword: (opts) => requestPassword({ ...(opts || {}), storageId: activeStorageId }),
@@ -61,6 +102,7 @@ function AppContent({
         baseFolderId,
         baseName,
         onUnauthorized: handleLogoutLocal,
+        storageId: activeStorageId,
     });
     const { api, loading: driveLoading, configReady } = drive;
     const initStarted = useRef(false);
@@ -89,10 +131,10 @@ function AppContent({
 
     const showInitSpinner = creatingStorage || !configReady || !dataLoaded || loadingStorage || !driveToken;
     const spinnerMessage = creatingStorage
-        ? "Создаем шифрование"
+        ? t("connect_spinner_creating")
         : !configReady || !dataLoaded
-            ? "Инициализация"
-            : "Подключаем хранилище";
+            ? t("connect_spinner_init")
+            : t("connect_spinner_loading");
 
     const uploadManager = useUploadManager({
         cryptoApi: api,
@@ -293,12 +335,12 @@ function AppContent({
                     }
                 };
                 const doRename = async (item) => {
-                    const v = await prompt({
-                        title: "Переименовать",
-                        message: "Введите новое имя",
-                        defaultValue: item.name,
-                        placeholder: "Новое имя",
-                    });
+                        const v = await prompt({
+                            title: t("dialog_rename_title"),
+                            message: t("dialog_rename_message"),
+                            defaultValue: item.name,
+                            placeholder: t("dialog_rename_placeholder"),
+                        });
                     if (v && v.trim()) {
                         const trimmed = v.trim();
                         const shouldEncrypt = !(api.isExcludedName?.(trimmed));
@@ -373,26 +415,26 @@ function AppContent({
 
                 const handleCreateFolder = async () => {
                     const name = await prompt({
-                        title: "Новая папка",
-                        message: "Введите название папки",
-                        placeholder: "Имя папки",
-                        confirmText: "Создать",
+                        title: t("dialog_new_folder_title"),
+                        message: t("dialog_new_folder_message"),
+                        placeholder: t("dialog_new_folder_placeholder"),
+                        confirmText: t("dialog_create"),
                     });
                     const trimmed = name?.trim();
                     if (!trimmed) return;
-                    const stopBusy = busy.start?.("create-folder") ?? (() => {});
-                    try {
-                        await api.createFolder(trimmed, currentFolder);
-                        await refresh();
-                    } catch (err) {
-                        await confirm({
-                            title: "Ошибка",
-                            message: err?.message || "Failed to create folder",
-                            confirmText: "OK",
-                            cancelText: "Закрыть",
-                        });
-                    } finally {
-                        stopBusy();
+            const stopBusy = busy.start?.("create-folder") ?? (() => {});
+            try {
+                await api.createFolder(trimmed, currentFolder);
+                await refresh();
+            } catch (err) {
+                await confirm({
+                    title: t("dialog_error"),
+                    message: err?.message || t("folder_create_error"),
+                    confirmText: t("dialog_ok"),
+                    cancelText: t("dialog_close"),
+                });
+            } finally {
+                stopBusy();
                     }
                 };
 
@@ -407,17 +449,16 @@ function AppContent({
                 const buildMenu = () => {
                     const base = [];
                     if (menu?.item) {
-                        base.push({ id: "open", label: "Open", onClick: () => onDouble(menu.item) });
                         if (menu.item.mimeType === "application/vnd.google-apps.folder") {
-                            base.push({ id: "download-folder", label: "Download as zip", onClick: () => enqueue(menu.item) });
+                            base.push({ id: "download-folder", label: t("menu_download_zip"), onClick: () => enqueue(menu.item) });
                         } else {
-                            base.push({ id: "download-one", label: "Download", onClick: () => enqueue(menu.item) });
+                            base.push({ id: "download-one", label: t("menu_download"), onClick: () => enqueue(menu.item) });
                         }
-                        base.push({ id: "rename", label: "Rename", onClick: () => doRename(menu.item) });
+                        base.push({ id: "rename", label: t("menu_rename"), onClick: () => doRename(menu.item) });
                     }
                     base.push({
                         id: "move",
-                        label: "Move",
+                        label: t("menu_move"),
                         onClick: () =>
                             setDialog({
                                 open: true,
@@ -427,7 +468,7 @@ function AppContent({
                     });
                     base.push({
                         id: "copy",
-                        label: "Copy",
+                        label: t("menu_copy"),
                         onClick: () =>
                             setDialog({
                                 open: true,
@@ -439,28 +480,37 @@ function AppContent({
                     if (menu?.group) {
                         base.push({
                             id: "download-multi",
-                            label: "Download selected (zip)",
+                            label: t("menu_download_selected"),
                             onClick: () => {
                                 const sel = [...selectedIds].map((id) => items.find((x) => x.id === id)).filter(Boolean);
                                 enqueueMany(sel);
                             },
                         });
                     } else if (menu?.item) {
-                        base.push({ id: "download", label: "Download", onClick: () => enqueue(menu.item) });
+                        base.push({ id: "download", label: t("menu_download"), onClick: () => enqueue(menu.item) });
                     }
 
                     base.push({
                         id: "delete",
-                        label: "Delete",
+                        label: t("dialog_delete"),
                         danger: true,
                         onClick: async () => {
                             const ids = menu?.group ? [...selectedIds] : [menu?.item?.id];
                             const count = ids.length;
                             const ok = await confirm({
-                                title: "Удаление",
-                                message: count > 1 ? `Удалить ${count} объектов безвозвратно?` : `Удалить "${menu?.item?.name}"?`,
-                                confirmText: "Удалить",
-                                cancelText: "Отмена",
+                                title: t("dialog_delete_title"),
+                                message:
+                                    count > 1
+                                        ? t("dialog_delete_many").replace(
+                                              "{count}",
+                                              String(count)
+                                          )
+                                        : t("dialog_delete_one").replace(
+                                              "{name}",
+                                              menu?.item?.name ?? ""
+                                          ),
+                                confirmText: t("dialog_delete"),
+                                cancelText: t("dialog_cancel"),
                             });
                             if (!ok) return;
                             const stopBusy = busy.start?.("delete") ?? (() => {});
@@ -485,7 +535,7 @@ function AppContent({
                     <div className="app">
                         <Toolbar onRefresh={refresh}>
                             <button className="btn primary" type="button" onClick={toggleCreateMenu}>
-                                Create
+                                {t("dialog_create")}
                             </button>
                             <FileUploader
                                 ref={fileUploadRef}
@@ -534,23 +584,25 @@ function AppContent({
                                         type="checkbox"
                                         checked={allChecked}
                                         onChange={(e) => onToggleAll(e.target.checked)}
-                                        aria-label="Select all files"
+                                        aria-label={t("aria_select_all")}
                                     />
                                 </div>
 
                                 <div className="sort" style={{ fontWeight: 700 }} onClick={() => setSortBy("name")}>
-                                    Name <span className="sort-arrow">{sortInd("name")}</span>
+                                    {t("table_name")} <span className="sort-arrow">{sortInd("name")}</span>
                                 </div>
                                 <div className="sort" style={{ fontWeight: 700 }} onClick={() => setSortBy("size")}>
-                                    Size <span className="sort-arrow">{sortInd("size")}</span>
+                                    {t("table_size")} <span className="sort-arrow">{sortInd("size")}</span>
                                 </div>
                                 <div className="sort" style={{ fontWeight: 700 }} onClick={() => setSortBy("modifiedTime")}>
-                                    Modified <span className="sort-arrow">{sortInd("modifiedTime")}</span>
+                                    {t("table_modified")} <span className="sort-arrow">{sortInd("modifiedTime")}</span>
                                 </div>
                                 <div></div>
                             </div>
 
-                            {sortedItems.length === 0 && !loading && <div className="empty">Nothing here yet</div>}
+                            {sortedItems.length === 0 && !loading && (
+                                <div className="empty">{t("table_empty")}</div>
+                            )}
 
                             {sortedItems.map((it) => (
                                 <FileRow
@@ -565,7 +617,7 @@ function AppContent({
                             ))}
 
                             <div ref={sentinelRef} className="sentinel" />
-                            {loading && <div className="empty">Loading...</div>}
+                            {loading && <div className="empty">{t("table_loading")}</div>}
                             {error && <div className="empty" style={{ color: "var(--danger)" }}>{error}</div>}
                         </div>
 
@@ -575,24 +627,24 @@ function AppContent({
                                 y={createMenu.y}
                                 onClose={() => setCreateMenu(null)}
                                 items={[
-                                    { id: "create-folder", label: "Create folder", onClick: handleCreateFolder },
-                                    { id: "upload-file", label: "Upload file", onClick: handleUploadFile },
-                                    { id: "upload-folder", label: "Upload folder", onClick: handleUploadFolder },
+                                    { id: "create-folder", label: t("action_create_folder"), onClick: handleCreateFolder },
+                                    { id: "upload-file", label: t("action_upload_file"), onClick: handleUploadFile },
+                                    { id: "upload-folder", label: t("action_upload_folder"), onClick: handleUploadFolder },
                                 ]}
                             />
                         )}
 
                         {menu && <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={buildMenu()} />}
 
-                        <MoveCopyDialog
-                            api={api}
-                            open={dialog.open}
-                            mode={dialog.mode}
-                            startFolder={currentFolder}
-                            startName={breadcrumb[breadcrumb.length - 1]?.name || "Текущая папка"}
-                            onClose={() => setDialog({ open: false, mode: null })}
-                            onConfirm={confirmMoveCopy}
-                        />
+                    <MoveCopyDialog
+                        api={api}
+                        open={dialog.open}
+                        mode={dialog.mode}
+                        startFolder={currentFolder}
+                        startName={breadcrumb[breadcrumb.length - 1]?.name || t("movecopy_current_folder")}
+                        onClose={() => setDialog({ open: false, mode: null })}
+                        onConfirm={confirmMoveCopy}
+                    />
                     </div>
                 );
             },
@@ -606,10 +658,10 @@ function AppContent({
 
             <div className="session-bar">
                 <div>
-                    <p className="eyebrow">Cloud Defender</p>
-                    <h2 className="page-title">{storageName || "Хранилище"}</h2>
+                    <p className="eyebrow">{t("app_title")}</p>
+                    <h2 className="page-title">{storageName || t("storage_title")}</h2>
                     <p className="session-meta">
-                        Подключены как <span className="session-user">{user?.login}</span>
+                        {t("connected_as")} <span className="session-user">{user?.login}</span>
                     </p>
                 </div>
                 <div className="session-actions">
@@ -621,6 +673,9 @@ function AppContent({
                         onAdd={onAddStorage}
                         onLogout={onLogout}
                         onDelete={onDeleteStorage}
+                        onChangePassword={handleChangePassword}
+                        onChangeStoragePassword={handleChangeStoragePassword}
+                        onExportRclone={handleExportRcloneKeys}
                     />
                 </div>
             </div>
@@ -629,6 +684,249 @@ function AppContent({
                 <TransferTrayConnector uploadManager={uploadManager} />
                 <AppShell uploadManager={uploadManager} {...drive} />
             </DownloadProvider>
+
+            {rcloneModal.open && (
+                <div
+                    className="modal confirm-modal"
+                    onClick={() => setRcloneModal({ open: false, data: null, loading: false, error: "" })}
+                >
+                    <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+                        <h3 style={{ marginTop: 0, marginBottom: 8 }}>{t("rclone_keys_title")}</h3>
+                        {rcloneModal.loading && <p style={{ color: "var(--muted)" }}>{t("rclone_keys_loading")}</p>}
+                        {rcloneModal.error && <p style={{ color: "var(--danger)" }}>{rcloneModal.error}</p>}
+                        {!rcloneModal.loading && !rcloneModal.error && (
+                            <pre
+                                style={{
+                                    background: "#0b1120",
+                                    border: "1px solid #1f2937",
+                                    borderRadius: 10,
+                                    padding: 12,
+                                    maxHeight: 300,
+                                    overflow: "auto",
+                                    color: "var(--text)",
+                                    whiteSpace: "pre-wrap",
+                                    wordBreak: "break-all",
+                                }}
+                            >
+                                {JSON.stringify(rcloneModal.data || {}, null, 2)}
+                            </pre>
+                        )}
+                        <div className="confirm-actions">
+                            <button
+                                className="btn primary"
+                                type="button"
+                                onClick={() => setRcloneModal({ open: false, data: null, loading: false, error: "" })}
+                            >
+                                {t("action_close")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {storagePwdModal.open && (
+                <div
+                    className="modal confirm-modal"
+                    onClick={() =>
+                        !storagePwdModal.loading
+                            ? setStoragePwdModal({
+                                  open: false,
+                                  loading: false,
+                                  error: "",
+                                  current: "",
+                                  next: "",
+                                  confirm: "",
+                              })
+                            : null
+                    }
+                >
+                    <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+                        <h3 style={{ marginTop: 0, marginBottom: 8 }}>{t("change_password_encryption_title")}</h3>
+                        {storagePwdModal.error && <p style={{ color: "var(--danger)" }}>{storagePwdModal.error}</p>}
+                        <div className="field">
+                            <span>{t("field_current_password")}</span>
+                            <input
+                                className="input"
+                                type="password"
+                                value={storagePwdModal.current}
+                                onChange={(e) => setStoragePwdModal((p) => ({ ...p, current: e.target.value }))}
+                            />
+                        </div>
+                        <div className="field">
+                            <span>{t("field_new_password")}</span>
+                            <input
+                                className="input"
+                                type="password"
+                                value={storagePwdModal.next}
+                                onChange={(e) => setStoragePwdModal((p) => ({ ...p, next: e.target.value }))}
+                            />
+                        </div>
+                        <div className="field">
+                            <span>{t("field_confirm")}</span>
+                            <input
+                                className="input"
+                                type="password"
+                                value={storagePwdModal.confirm}
+                                onChange={(e) => setStoragePwdModal((p) => ({ ...p, confirm: e.target.value }))}
+                            />
+                        </div>
+                        <div className="confirm-actions">
+                            <button
+                                className="btn secondary"
+                                type="button"
+                                onClick={() =>
+                                    setStoragePwdModal({
+                                        open: false,
+                                        loading: false,
+                                        error: "",
+                                        current: "",
+                                        next: "",
+                                        confirm: "",
+                                    })
+                                }
+                                disabled={storagePwdModal.loading}
+                            >
+                                {t("action_cancel")}
+                            </button>
+                            <button
+                                className="btn primary"
+                                type="button"
+                                disabled={storagePwdModal.loading}
+                                onClick={async () => {
+                                    const current = storagePwdModal.current.trim();
+                                    const next = storagePwdModal.next.trim();
+                                    const confirmPwd = storagePwdModal.confirm.trim();
+                                    if (!current || !next || !confirmPwd) {
+                                        setStoragePwdModal((p) => ({ ...p, error: t("error_fill_all") }));
+                                        return;
+                                    }
+                                    if (next !== confirmPwd) {
+                                        setStoragePwdModal((p) => ({ ...p, error: t("error_password_mismatch") }));
+                                        return;
+                                    }
+                                    setStoragePwdModal((p) => ({ ...p, loading: true, error: "" }));
+                                    try {
+                                        await api.changeEncryptionPassword({
+                                            currentPassword: current,
+                                            newPassword: next,
+                                        });
+                                        setStoragePwdModal({
+                                            open: false,
+                                            loading: false,
+                                            error: "",
+                                            current: "",
+                                            next: "",
+                                            confirm: "",
+                                        });
+                                        await confirm({
+                                            title: t("dialog_done_title"),
+                                            message: t("encryption_password_changed_ok"),
+                                            confirmText: t("dialog_ok"),
+                                            cancelText: null,
+                                        });
+                                    } catch (e) {
+                                        setStoragePwdModal((p) => ({
+                                            ...p,
+                                            loading: false,
+                                            error: e?.message || t("change_password_encryption_title"),
+                                        }));
+                                    }
+                                }}
+                            >
+                                {storagePwdModal.loading ? t("action_saving") : t("action_save")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {pwdModal.open && (
+                <div
+                    className="modal confirm-modal"
+                    onClick={() =>
+                        setPwdModal({ open: false, loading: false, error: "", current: "", next: "", confirm: "" })
+                    }
+                >
+                    <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
+                        <h3 style={{ marginTop: 0, marginBottom: 8 }}>{t("change_password_title")}</h3>
+                        {pwdModal.error && <p style={{ color: "var(--danger)" }}>{pwdModal.error}</p>}
+                        <div className="field">
+                            <span>{t("field_current_password")}</span>
+                            <input
+                                className="input"
+                                type="password"
+                                value={pwdModal.current}
+                                onChange={(e) => setPwdModal((p) => ({ ...p, current: e.target.value }))}
+                            />
+                        </div>
+                        <div className="field">
+                            <span>{t("field_new_password")}</span>
+                            <input
+                                className="input"
+                                type="password"
+                                value={pwdModal.next}
+                                onChange={(e) => setPwdModal((p) => ({ ...p, next: e.target.value }))}
+                            />
+                        </div>
+                        <div className="field">
+                            <span>{t("field_confirm")}</span>
+                            <input
+                                className="input"
+                                type="password"
+                                value={pwdModal.confirm}
+                                onChange={(e) => setPwdModal((p) => ({ ...p, confirm: e.target.value }))}
+                            />
+                        </div>
+                        <div className="confirm-actions">
+                            <button
+                                className="btn secondary"
+                                type="button"
+                                onClick={() =>
+                                    setPwdModal({ open: false, loading: false, error: "", current: "", next: "", confirm: "" })
+                                }
+                                disabled={pwdModal.loading}
+                            >
+                                {t("action_cancel")}
+                            </button>
+                            <button
+                                className="btn primary"
+                                type="button"
+                                disabled={pwdModal.loading}
+                                onClick={async () => {
+                                    const current = pwdModal.current.trim();
+                                    const next = pwdModal.next.trim();
+                                    const confirmPwd = pwdModal.confirm.trim();
+                                    if (!current || !next || !confirmPwd) {
+                                        setPwdModal((p) => ({ ...p, error: t("error_fill_all") }));
+                                        return;
+                                    }
+                                    if (next !== confirmPwd) {
+                                        setPwdModal((p) => ({ ...p, error: t("error_password_mismatch") }));
+                                        return;
+                                    }
+                                    setPwdModal((p) => ({ ...p, loading: true, error: "" }));
+                                    try {
+                                        await changePassword({ old_password: current, new_password: next });
+                                        setPwdModal({ open: false, loading: false, error: "", current: "", next: "", confirm: "" });
+                                        await confirm({
+                                            title: t("dialog_done_title"),
+                                            message: t("password_changed_ok"),
+                                            confirmText: t("dialog_ok"),
+                                            cancelText: null,
+                                        });
+                                    } catch (e) {
+                                        setPwdModal((p) => ({
+                                            ...p,
+                                            loading: false,
+                                            error: e?.message || t("change_password_title"),
+                                        }));
+                                    }
+                                }}
+                            >
+                                {pwdModal.loading ? t("action_saving") : t("action_save")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -669,7 +967,7 @@ export default function App() {
     const [activeStorageId, setActiveStorageId] = useState(null);
     const [driveToken, setDriveToken] = useState(null);
     const [baseFolderId, setBaseFolderId] = useState("root");
-    const [baseName, setBaseName] = useState("Storage");
+    const [baseName, setBaseName] = useState(t("default_storage_name"));
     const [rootReady, setRootReady] = useState(false);
     const [storageLoading, setStorageLoading] = useState(false);
     const [globalError, setGlobalError] = useState("");
@@ -687,6 +985,17 @@ export default function App() {
             // ignore
         }
     };
+    const handleSelectStorage = useCallback(
+        (id) => {
+            if (!id) return;
+            if (id === activeStorageId) return;
+            setActiveStorageId(id);
+            setDriveToken(null);
+            setRootReady(false);
+            setBaseFolderId("root");
+        },
+        [activeStorageId]
+    );
 
     const clearSession = useCallback(() => {
         clearPasswordCacheGlobal();
@@ -738,7 +1047,7 @@ export default function App() {
             if (e?.status === 401) {
                 clearSession();
             } else {
-                setGlobalError(e?.message || "Не удалось загрузить хранилища");
+                setGlobalError(e?.message || t("storages_error_load"));
             }
         }
     }, [user, clearSession, activeStorageId]);
@@ -780,7 +1089,7 @@ export default function App() {
             try {
                 if (storage.resolvedRootId) {
                     setBaseFolderId(storage.resolvedRootId);
-                    setBaseName(storage.name || "Storage");
+                    setBaseName(storage.name || t("default_storage_name"));
                     setDriveToken(storage.access_token);
                     setRootReady(true);
                     return;
@@ -789,11 +1098,11 @@ export default function App() {
                 const rootId = await ensureRootFolder(driveApi, storage.root_path);
                 setStorages((prev) => prev.map((s) => (s.id === storage.id ? { ...s, resolvedRootId: rootId } : s)));
                 setBaseFolderId(rootId);
-                setBaseName(storage.name || "Storage");
+                setBaseName(storage.name || t("default_storage_name"));
                 setDriveToken(storage.access_token);
                 setRootReady(true);
             } catch (e) {
-                setGlobalError(e?.message || "Не удалось подготовить хранилище");
+                setGlobalError(e?.message || t("storages_error_prepare"));
             } finally {
                 setStorageLoading(false);
             }
@@ -813,7 +1122,7 @@ export default function App() {
             setBlockAddModal(false);
             setActiveStorageId(created.id);
             setDriveToken(null);
-            setBaseName(created.name || "Storage");
+            setBaseName(created.name || t("default_storage_name"));
             setBaseFolderId("root");
             setRootReady(false);
             return created;
@@ -851,7 +1160,7 @@ export default function App() {
             if (e?.status === 401) {
                 await handleLogout();
             } else {
-                setGlobalError(e?.message || "Не удалось удалить хранилище");
+                setGlobalError(e?.message || t("storages_error_delete"));
             }
         } finally {
             setDeleteBusy(false);
@@ -878,18 +1187,33 @@ export default function App() {
                             onDeleteStorage={(s) => setDeleteTarget(s)}
                             storages={storages}
                             activeStorageId={activeStorageId}
-                            onSelectStorage={(id) => { setActiveStorageId(id); setDriveToken(null); setRootReady(false); setBaseFolderId("root"); }}
+                            onSelectStorage={handleSelectStorage}
                         />
                     ) : user ? (
                         <div className="workspace-shell">
-                            <StartupSpinner visible={storageLoading} message="Подключаемся..." />
+                            <StartupSpinner
+                                visible={storageLoading}
+                                message={t("storage_connecting")}
+                            />
                             <div className="session-bar">
                                 <div>
-                                    <p className="eyebrow">Cloud Defender</p>
-                                    <h2 className="page-title">Хранилища</h2>
+                                    <p className="eyebrow">{t("app_title")}</p>
+                                    <h2 className="page-title">{t("storage_list_title")}</h2>
                                     <p className="session-meta">
-                                        Подключены как <span className="session-user">{user?.login}</span>
+                                        {t("connected_as")}{" "}
+                                        <span className="session-user">{user?.login}</span>
                                     </p>
+                                </div>
+                                <div className="session-actions">
+                                    <StorageMenu
+                                        user={user}
+                                        storages={storages}
+                                        activeId={activeStorageId}
+                                        onSelect={handleSelectStorage}
+                                        onAdd={() => setAddModalOpen(true)}
+                                        onLogout={handleLogout}
+                                        onDelete={(s) => setDeleteTarget(s)}
+                                    />
                                 </div>
                             </div>
                             {globalError && <div className="alert" style={{ marginTop: 12 }}>{globalError}</div>}
@@ -901,6 +1225,7 @@ export default function App() {
                         <AddStorageModal
                             open={addModalOpen}
                             blocking={blockAddModal}
+                            hasStorages={storages.length > 0}
                             onClose={() => (!blockAddModal ? setAddModalOpen(false) : null)}
                             onCreate={handleCreateStorage}
                         />
@@ -919,16 +1244,19 @@ export default function App() {
                     {deleteTarget && (
                         <div className="modal confirm-modal" onClick={() => (!deleteBusy ? setDeleteTarget(null) : null)}>
                             <div className="confirm-dialog" onClick={(e) => e.stopPropagation()}>
-                                <h3 style={{ marginTop: 0, marginBottom: 8 }}>Удалить хранилище</h3>
+                                <h3 style={{ marginTop: 0, marginBottom: 8 }}>{t("storages_delete_confirm")}</h3>
                                 <p style={{ marginTop: 0, color: "var(--muted)" }}>
-                                    Вы уверены, что хотите удалить "{deleteTarget.name}"?
+                                    {t("storages_delete_question").replace(
+                                        "{name}",
+                                        deleteTarget.name || ""
+                                    )}
                                 </p>
                                 <div className="confirm-actions">
                                     <button className="btn ghost" type="button" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>
-                                        Отмена
+                                        {t("delete_cancel")}
                                     </button>
                                     <button className="btn primary" type="button" onClick={handleDeleteStorage} disabled={deleteBusy}>
-                                        {deleteBusy ? "Удаляем..." : "Удалить"}
+                                        {deleteBusy ? t("delete_busy") : t("delete_confirm")}
                                     </button>
                                 </div>
                             </div>
