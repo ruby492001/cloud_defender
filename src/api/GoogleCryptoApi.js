@@ -423,7 +423,7 @@ export default class GoogleCryptoApi {
                 }
             }
             if (typeof rawPassword !== "string" || !rawPassword.trim()) {
-                throw new Error("Password is required to initialize crypto configuration");
+                throw new Error(t("password_required_init", "Password is required to initialize crypto configuration"));
             }
             const trimmedPassword = rawPassword.trim();
             this._oneTimeUnlockPassword = trimmedPassword;
@@ -517,7 +517,7 @@ export default class GoogleCryptoApi {
     async decryptOwnKeyWithPassword({ encryptedHex, config, password, payloadParts }) {
         const normalizedPassword = typeof password === "string" ? password.trim() : "";
         if (!normalizedPassword) {
-            const err = new Error("Password is required to unlock encryption key");
+            const err = new Error(t("password_required_unlock", "Password is required to unlock encryption key"));
             err.code = "PASSWORD_REQUIRED";
             throw err;
         }
@@ -552,7 +552,7 @@ export default class GoogleCryptoApi {
             const invalid =
                 err?.message === "CONTROL_MISMATCH" ||
                 err?.message === "DECRYPTED_KEY_INVALID" ||
-                err?.message === "Password is required to unlock encryption key";
+                err?.message === t("password_required_unlock", "Password is required to unlock encryption key");
             if (invalid) {
                 const error = new Error("Invalid password");
                 error.code = "INVALID_PASSWORD";
@@ -564,7 +564,7 @@ export default class GoogleCryptoApi {
     async encryptOwnKeyWithPassword({ keyHex, config, password }) {
         const normalizedPassword = typeof password === "string" ? password.trim() : "";
         if (!normalizedPassword) {
-            const err = new Error("Password is required to encrypt key");
+            const err = new Error(t("password_required_encrypt", "Password is required to encrypt key"));
             err.code = "PASSWORD_REQUIRED";
             throw err;
         }
@@ -608,13 +608,13 @@ export default class GoogleCryptoApi {
             });
             const extracted = this.extractPasswordValue(rawPassword);
             if (extracted === null || typeof extracted === "undefined") {
-                throw new Error("Password is required to unlock encryption key");
+                throw new Error(t("password_required_unlock", "Password is required to unlock encryption key"));
             }
             const trimmedPassword = typeof extracted === "string" ? extracted.trim() : "";
             if (!trimmedPassword) {
                 attempt += 1;
                 if (attempt >= MAX_ATTEMPTS) {
-                    throw new Error("Password is required to unlock encryption key");
+                    throw new Error(t("password_required_unlock", "Password is required to unlock encryption key"));
                 }
                 continue;
             }
@@ -664,13 +664,13 @@ export default class GoogleCryptoApi {
             });
             const extracted = this.extractPasswordValue(rawPassword);
             if (extracted === null || typeof extracted === "undefined") {
-                throw new Error("Password is required to unlock encryption key");
+                throw new Error(t("password_required_unlock", "Password is required to unlock encryption key"));
             }
             const trimmedPassword = typeof extracted === "string" ? extracted.trim() : "";
             if (!trimmedPassword) {
                 attempt += 1;
                 if (attempt >= MAX_ATTEMPTS) {
-                    throw new Error("Password is required to unlock encryption key");
+                    throw new Error(t("password_required_unlock", "Password is required to unlock encryption key"));
                 }
                 continue;
             }
@@ -894,7 +894,7 @@ export default class GoogleCryptoApi {
         normalized.pbkdf2Hash = PBKDF2_HASH_ALGORITHM;
         const password = typeof options.password === "string" ? options.password.trim() : "";
         if (!password) {
-            throw new Error("Password is required to configure crypto");
+            throw new Error(t("password_required_configure", "Password is required to configure crypto"));
         }
         const keyLength = keyLengthForAlgorithm(normalized.encryptionAlgorithm);
         const fileKeyBytes = this.generateRandomBytes(keyLength);
@@ -1047,7 +1047,7 @@ export default class GoogleCryptoApi {
     async configureRcloneCrypto(options = {}) {
         const basePassword = typeof options.password === "string" ? options.password.trim() : "";
         if (!basePassword) {
-            throw new Error("Password is required to configure crypto");
+            throw new Error(t("password_required_configure", "Password is required to configure crypto"));
         }
         const primaryRaw = typeof options.rclonePassword === "string" ? options.rclonePassword.trim() : "";
         const secondaryRaw = typeof options.rclonePassword2 === "string" ? options.rclonePassword2.trim() : "";
