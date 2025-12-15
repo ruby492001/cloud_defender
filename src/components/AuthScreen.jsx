@@ -5,6 +5,9 @@ import { t } from "../strings.js";
 const initialLoginState = { login: "", password: "" };
 const initialRegisterState = { login: "", password: "", confirm: "" };
 
+/**
+ * Auth form that handles login and optional registration flow.
+ */
 export default function AuthScreen({ onAuthenticated }) {
     const [loginForm, setLoginForm] = useState(initialLoginState);
     const [registerForm, setRegisterForm] = useState(initialRegisterState);

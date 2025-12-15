@@ -18,6 +18,9 @@ import { t } from "../strings.js";
 const sessionPasswordCache = new Map();
 const PasswordPromptContext = createContext(null);
 
+/**
+ * Provides a modal password prompt flow with per-storage caching and setup options.
+ */
 export function PasswordPromptProvider({ children }) {
     const [requestState, setRequestState] = useState(null);
     const pendingRef = useRef(null);

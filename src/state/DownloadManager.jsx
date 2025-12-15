@@ -38,6 +38,9 @@ const savedOnce = new Set()
 const canUseFileSystemSave = () => typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function'
 const STREAMING_THRESHOLD_BYTES = 300 * 1024 * 1024
 
+/**
+ * Provides download queue management with progress, integrity checks and optional zipping for folders.
+ */
 export function DownloadProvider({ api, children }){
     const [tasks, setTasks] = useState([])
     const running = useRef(0)
@@ -133,29 +136,34 @@ export function DownloadProvider({ api, children }){
 
     const downloadFileTask = async (task, signal)=>{
         task.crypto = task.crypto || { uploadSession: null, downloadSession: null }
-        const { blob, name, session, savedToFile, cleanup, asBlob } = await api.downloadInChunks({
-            id: task.fileId,
-            name: task.name,
-            encryptedName: task.encryptedName,
-            size: task.size ?? undefined,
-            session: task.crypto?.downloadSession,
-            signal,
-            fileHandle: task.fileHandle,
-            concurrency: chunkConcurrency,
-            onProgress: (loaded, total)=>{
-                setTasks(ts => ts.map(t => {
-                    if(t.id !== task.id) return t
-                    const totalBytes = total || task.size || t.size || 0
-                    const startedAt = t.startedAt || task.startedAt || Date.now()
-                    let nextProgress = t.progress
-                    if(totalBytes > 0){
-                        nextProgress = Math.min(100, Math.round((loaded / totalBytes) * 100))
-                    }
-                    const etaSeconds = computeEtaFromBytes({ startedAt, loaded, total, fallbackTotal: totalBytes })
-                    return { ...t, progress: totalBytes > 0 ? nextProgress : t.progress, etaSeconds: Number.isFinite(etaSeconds) ? etaSeconds : null }
-                }))
-            }
-        })
+            const { blob, name, session, savedToFile, cleanup, asBlob } = await api.downloadInChunks({
+                id: task.fileId,
+                name: task.name,
+                encryptedName: task.encryptedName,
+                size: task.size ?? undefined,
+                session: task.crypto?.downloadSession,
+                signal,
+                fileHandle: task.fileHandle,
+                concurrency: chunkConcurrency,
+                onProgress: (loaded, total)=>{
+                    setTasks(ts => ts.map(t => {
+                        if(t.id !== task.id) return t
+                        const totalBytes = total || task.size || t.size || 0
+                        const fallbackTotal = totalBytes || (loaded > 0 ? loaded : 0)
+                        const startedAt = t.startedAt || task.startedAt || Date.now()
+                        let nextProgress = t.progress
+                        if(fallbackTotal > 0){
+                            nextProgress = Math.min(100, Math.round((loaded / fallbackTotal) * 100))
+                        }
+                        const etaSeconds = computeEtaFromBytes({ startedAt, loaded, total, fallbackTotal })
+                        return {
+                            ...t,
+                            progress: Number.isFinite(nextProgress) ? nextProgress : t.progress,
+                            etaSeconds: Number.isFinite(etaSeconds) ? etaSeconds : null
+                        }
+                    }))
+                }
+            })
         if(session){
             task.crypto.downloadSession = session
             patchTask(task.id, { crypto: { downloadSession: session } })

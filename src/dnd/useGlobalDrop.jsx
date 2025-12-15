@@ -7,6 +7,9 @@ import {
     stripRootFromPath,
 } from "../utils/tree";
 
+/**
+ * Sets up global drag-and-drop listeners and funnels dropped files/folders into the upload manager.
+ */
 export default function useGlobalDrop({ api, uploadManager }) {
     const [isOver, setIsOver] = useState(false);
     const dragDepthRef = useRef(0);

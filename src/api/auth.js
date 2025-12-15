@@ -59,3 +59,12 @@ export async function fetchDesktopClient() {
 
     return parseResponse(response, t("api_fetch_rclone_error"));
 }
+
+export async function fetchClientId() {
+    const response = await fetch(`${API_PREFIX}/google/client-id`, {
+        method: "GET",
+        credentials: "include",
+    });
+
+    return parseResponse(response, "Failed to fetch Google client id");
+}
