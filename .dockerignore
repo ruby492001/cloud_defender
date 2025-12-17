@@ -1,0 +1,12 @@
+.git
+.idea
+node_modules
+dist
+
+# Backend is built from its own context in ./backend
+backend
+
+# Local env files
+.env
+.env.local
+
