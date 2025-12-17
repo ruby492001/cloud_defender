@@ -144,7 +144,28 @@ export class DriveApi {
     async downloadInChunks({ id, name, size, onProgress, signal, onChunk, concurrency = 3 }) {
         const meta = await this.getFileMeta(id);
         const finalName = name ?? meta.name;
-        const fileSize = Number(size ?? meta.size ?? 0) || 0;
+        let fileSize = Number(size ?? meta.size ?? 0) || 0;
+
+        // Some Drive file types may omit `size`. Try to resolve the total using a 1-byte range request.
+        // This allows a progressive download UI instead of a 0% -> 100% jump.
+        if (!fileSize) {
+            try {
+                const probe = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?alt=media`, {
+                    headers: this.authHeaders({ Range: "bytes=0-0" }),
+                    signal,
+                });
+                if (probe.status === 206) {
+                    const contentRange = probe.headers.get("Content-Range") || "";
+                    const match = contentRange.match(/\/(\d+)\s*$/);
+                    const total = match ? Number(match[1]) : 0;
+                    if (Number.isFinite(total) && total > 0) {
+                        fileSize = total;
+                    }
+                }
+            } catch {
+                // ignore probe errors and fall back to non-progressive download
+            }
+        }
 
         if (!fileSize) {
             const res = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?alt=media`, {

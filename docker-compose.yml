@@ -1,0 +1,30 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runner
+    environment:
+      SERVER_ADDR: ":8080"
+      DB_PATH: "/data/app.db"
+    volumes:
+      - api-data:/data
+    restart: unless-stopped
+    env_file:
+      - .env
+      - .env.local
+
+  web:
+    image: cloud_defender_web:local
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      target: runner
+    depends_on:
+      - api
+    ports:
+      - "${HTTP_PORT}:80"
+    restart: unless-stopped
+
+volumes:
+  api-data:
