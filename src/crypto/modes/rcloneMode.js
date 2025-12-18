@@ -482,7 +482,6 @@ function deobfuscateSegment(segment, context) {
         }
     }
 
-    // Fallback: brute force rotation when prefix is missing
     let best = null;
     let bestScore = -1;
     let bestDir = -1;

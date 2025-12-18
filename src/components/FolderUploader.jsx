@@ -1,4 +1,3 @@
-// src/components/FolderUploader.jsx
 import React, { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import {
     getRelativePath,

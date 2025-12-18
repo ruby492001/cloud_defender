@@ -1,4 +1,3 @@
-// src/logic/useUploadManager.js
 import { useRef, useState, useCallback } from "react";
 import { t } from "../strings.js";
 
@@ -17,9 +16,7 @@ function computeEtaSeconds({ startedAt, uploaded, total, fallbackTotal }) {
     return remainingBytes / speed;
 }
 
-/**
- * Manages client-side upload queue with concurrency, grouping and cancellation support.
- */
+
 export default function useUploadManager({
     cryptoApi,
     chunkSize = 8 * 1024 * 1024,

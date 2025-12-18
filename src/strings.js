@@ -1,6 +1,5 @@
 export const STRINGS = {
     ru: {
-        // Common
         app_title: "Cloud Defender",
         action_close: "Закрыть",
         action_cancel: "Отмена",
@@ -28,7 +27,6 @@ export const STRINGS = {
         action_upload_folder: "Загрузить папку",
         action_upload_files: "Загрузить файлы",
 
-        // Table / list
         table_name: "Имя",
         table_size: "Размер",
         table_modified: "Изменено",
@@ -36,7 +34,6 @@ export const STRINGS = {
         table_loading: "Загрузка...",
         default_storage_name: "Хранилище",
 
-        // Context menu
         menu_open: "Открыть",
         menu_download: "Скачать",
         menu_download_zip: "Скачать как zip",
@@ -45,7 +42,6 @@ export const STRINGS = {
         menu_move: "Переместить",
         menu_copy: "Копировать",
 
-        // Rename / new folder dialogs
         dialog_rename_title: "Переименовать",
         dialog_rename_message: "Введите новое имя",
         dialog_rename_placeholder: "Новое имя",
@@ -56,7 +52,6 @@ export const STRINGS = {
         dialog_delete_many: "Удалить {count} объектов безвозвратно?",
         dialog_delete_one: 'Удалить "{name}"?',
 
-        // Storage / sessions
         storage_title: "Хранилище",
         storage_list_title: "Хранилища",
         storage_list_heading: "Хранилища",
@@ -76,17 +71,14 @@ export const STRINGS = {
         delete_busy: "Удаляем...",
         delete_confirm: "Удалить",
 
-        // Spinners
         connect_spinner_creating: "Создаем шифрование",
         connect_spinner_init: "Инициализация",
         connect_spinner_loading: "Подключаем хранилище",
 
-        // Rclone
         rclone_keys_title: "Ключи для rclone",
         rclone_keys_loading: "Загрузка...",
         rclone_error: "Не удалось получить ключи",
 
-        // Password change
         change_password_title: "Смена пароля",
         change_password_encryption_title: "Смена пароля шифрования",
         change_password_encryption_error: "Не удалось сменить пароль шифрования",
@@ -99,13 +91,11 @@ export const STRINGS = {
         password_changed_ok: "Пароль обновлен",
         encryption_password_changed_ok: "Пароль шифрования обновлен",
 
-        // Account menu
         account_section_title: "Учетная запись",
         account_change_password: "Сменить пароль",
         account_export_rclone: "Получить ключи для rclone",
         account_logout: "Выйти",
 
-        // Transfer tray
         transfer_title: "Передачи",
         transfer_header_title: "Передачи файлов",
         transfer_header_caption: "Загрузки в Drive и скачивания на устройство",
@@ -136,7 +126,6 @@ export const STRINGS = {
         transfer_integrity_error: "Нарушена целостность данных",
         transfer_eta_label: "ETA {eta}",
 
-        // Add storage modal
         add_storage_title: "Новое хранилище",
         add_storage_add: "Добавить",
         add_storage_name: "Название",
@@ -154,7 +143,6 @@ export const STRINGS = {
         add_storage_error_create: "Не удалось создать хранилище",
         add_storage_submit: "Создать",
 
-        // Auth
         auth_login_heading: "Войти",
         auth_login: "Войти",
         auth_username: "Логин",
@@ -175,7 +163,6 @@ export const STRINGS = {
         auth_error_register_mismatch: "Пароли не совпадают",
         auth_error_register: "Не удалось создать учетную запись",
 
-        // Password prompt
         password_prompt_title_setup: "Создание пароля",
         password_prompt_setup_message: "Создайте пароль для шифрования файлов",
         password_prompt_title_unlock: "Требуется пароль",
@@ -214,7 +201,6 @@ export const STRINGS = {
         password_prompt_continue: "Продолжить",
         password_prompt_cancel: "Отмена",
 
-        // Move/copy dialog
         movecopy_title_move: "Переместить в выбранную папку",
         movecopy_title_copy: "Копировать в выбранную папку",
         movecopy_folder: "Папка",
@@ -227,7 +213,6 @@ export const STRINGS = {
         movecopy_copy_here: "Копировать сюда",
         movecopy_current_folder: "Текущая папка",
 
-        // Storage select modal
         storage_select_title: "Выберите хранилище",
         storage_select_empty: "Нет доступных хранилищ",
         storage_select_name: "Имя",
@@ -235,7 +220,6 @@ export const STRINGS = {
         storage_select_action: "Действие",
         storage_select_choose: "Выбрать",
 
-        // Upload overlay
         upload_overlay_queue: "В очереди",
         upload_overlay_init: "Инициализация",
         upload_overlay_uploading: "Загрузка",
@@ -254,7 +238,6 @@ export const STRINGS = {
         upload_status_failed: "Загрузка не удалась",
         upload_error_crypto_required: "Требуется cryptoApi",
 
-        // Folder uploader
         folder_uploader_title_unavailable: "Загрузка папок недоступна",
         folder_uploader_msg_unavailable:
             "Браузер не поддерживает выбор папки. Используйте Chrome или Edge, либо перетащите папку на страницу.",
@@ -264,10 +247,8 @@ export const STRINGS = {
         folder_uploader_cancel: "Отмена",
         folder_uploader_button: "Загрузить папку",
 
-        // Drop hint
         drop_hint: "Отпусти файлы или папки, чтобы загрузить в Google Drive",
 
-        // Download manager dialogs
         downloadmgr_big_folder_title: "Большая папка",
         downloadmgr_big_folder_message: "Папка весит примерно {mb} МБ. Скачать как архив?",
         downloadmgr_big_folder_confirm: "Скачать",
@@ -275,7 +256,6 @@ export const STRINGS = {
         downloadmgr_no_direct_message:
             "Файл около {mb} МБ будет загружен через память браузера. Продолжить?",
 
-        // API errors
         api_login_error: "Не удалось выполнить вход",
         api_register_error: "Не удалось создать учетную запись",
         api_change_pwd_error: "Не удалось сменить пароль",
@@ -288,7 +268,6 @@ export const STRINGS = {
         storages_error_load: "Не удалось загрузить хранилища",
         drive_error_folder: "Не удалось загрузить содержимое папки",
 
-        // File row
         file_alt_folder: "Папка",
         file_alt_file: "Файл",
         aria_menu: "Меню",
@@ -297,7 +276,6 @@ export const STRINGS = {
         busy_overlay_wait: "Пожалуйста, подождите…",
     },
     en: {
-        // Common
         app_title: "Cloud Defender",
         action_close: "Close",
         action_cancel: "Cancel",
@@ -325,7 +303,6 @@ export const STRINGS = {
         action_upload_folder: "Upload folder",
         action_upload_files: "Upload files",
 
-        // Table / list
         table_name: "Name",
         table_size: "Size",
         table_modified: "Modified",
@@ -333,7 +310,6 @@ export const STRINGS = {
         table_loading: "Loading...",
         default_storage_name: "Storage",
 
-        // Context menu
         menu_open: "Open",
         menu_download: "Download",
         menu_download_zip: "Download as zip",
@@ -342,7 +318,6 @@ export const STRINGS = {
         menu_move: "Move",
         menu_copy: "Copy",
 
-        // Rename / new folder dialogs
         dialog_rename_title: "Rename",
         dialog_rename_message: "Enter new name",
         dialog_rename_placeholder: "New name",
@@ -353,7 +328,6 @@ export const STRINGS = {
         dialog_delete_many: "Delete {count} items permanently?",
         dialog_delete_one: 'Delete "{name}"?',
 
-        // Storage / sessions
         storage_title: "Storage",
         storage_list_title: "Storages",
         storage_list_heading: "Storages",
@@ -373,17 +347,14 @@ export const STRINGS = {
         delete_busy: "Deleting...",
         delete_confirm: "Delete",
 
-        // Spinners
         connect_spinner_creating: "Creating encryption",
         connect_spinner_init: "Initializing",
         connect_spinner_loading: "Connecting storage",
 
-        // Rclone
         rclone_keys_title: "Keys for rclone",
         rclone_keys_loading: "Loading...",
         rclone_error: "Failed to fetch keys",
 
-        // Password change
         change_password_title: "Change password",
         change_password_encryption_title: "Change encryption password",
         change_password_encryption_error: "Failed to change encryption password",
@@ -396,13 +367,11 @@ export const STRINGS = {
         password_changed_ok: "Password updated",
         encryption_password_changed_ok: "Encryption password updated",
 
-        // Account menu
         account_section_title: "Account",
         account_change_password: "Change password",
         account_export_rclone: "Export keys for rclone",
         account_logout: "Log out",
 
-        // Transfer tray
         transfer_title: "Transfers",
         transfer_header_title: "File transfers",
         transfer_header_caption: "Uploads to Drive and downloads to device",
@@ -433,7 +402,6 @@ export const STRINGS = {
         transfer_integrity_error: "Data integrity corrupted",
         transfer_eta_label: "ETA {eta}",
 
-        // Add storage modal
         add_storage_title: "New storage",
         add_storage_add: "Add",
         add_storage_name: "Name",
@@ -451,7 +419,6 @@ export const STRINGS = {
         add_storage_error_create: "Failed to create storage",
         add_storage_submit: "Create",
 
-        // Auth
         auth_login_heading: "Log in",
         auth_login: "Log in",
         auth_username: "Username",
@@ -472,7 +439,6 @@ export const STRINGS = {
         auth_error_register_mismatch: "Passwords do not match",
         auth_error_register: "Failed to create account",
 
-        // Password prompt
         password_prompt_title_setup: "Create password",
         password_prompt_setup_message: "Create a password for file encryption",
         password_prompt_title_unlock: "Password required",
@@ -511,7 +477,6 @@ export const STRINGS = {
         password_prompt_continue: "Continue",
         password_prompt_cancel: "Cancel",
 
-        // Move/copy dialog
         movecopy_title_move: "Move to selected folder",
         movecopy_title_copy: "Copy to selected folder",
         movecopy_folder: "Folder",
@@ -524,7 +489,6 @@ export const STRINGS = {
         movecopy_copy_here: "Copy here",
         movecopy_current_folder: "Current folder",
 
-        // Storage select modal
         storage_select_title: "Choose a storage",
         storage_select_empty: "No storages available",
         storage_select_name: "Name",
@@ -532,7 +496,6 @@ export const STRINGS = {
         storage_select_action: "Action",
         storage_select_choose: "Select",
 
-        // Upload overlay
         upload_overlay_queue: "In queue",
         upload_overlay_init: "Initializing",
         upload_overlay_uploading: "Uploading",
@@ -551,7 +514,6 @@ export const STRINGS = {
         upload_status_failed: "Upload failed",
         upload_error_crypto_required: "cryptoApi is required",
 
-        // Folder uploader
         folder_uploader_title_unavailable: "Folder upload unavailable",
         folder_uploader_msg_unavailable:
             "Your browser does not support folder selection. Use Chrome or Edge, or drop a folder onto the page.",
@@ -561,17 +523,14 @@ export const STRINGS = {
         folder_uploader_cancel: "Cancel",
         folder_uploader_button: "Upload folder",
 
-        // Drop hint
         drop_hint: "Drop files or folders to upload to Google Drive",
 
-        // Download manager dialogs
         downloadmgr_big_folder_title: "Large folder",
         downloadmgr_big_folder_message: "Folder is about {mb} MB. Download as archive?",
         downloadmgr_big_folder_confirm: "Download",
         downloadmgr_no_direct_title: "Direct download unavailable",
         downloadmgr_no_direct_message: "File about {mb} MB will be loaded through browser memory. Continue?",
 
-        // API errors
         api_login_error: "Login failed",
         api_register_error: "Registration failed",
         api_change_pwd_error: "Failed to change password",
@@ -584,7 +543,6 @@ export const STRINGS = {
         storages_error_load: "Failed to load storages",
         drive_error_folder: "Failed to load folder contents",
 
-        // File row
         file_alt_folder: "Folder",
         file_alt_file: "File",
         aria_menu: "Menu",

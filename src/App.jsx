@@ -1,5 +1,4 @@
-﻿
-import { useCallback, useEffect, useState } from "react";
+﻿import { useCallback, useEffect, useState } from "react";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import AuthScreen from "./components/AuthScreen.jsx";
 import AddStorageModal from "./components/AddStorageModal.jsx";
@@ -18,9 +17,6 @@ import { t } from "./strings.js";
 const AUTH_STORAGE_KEY = "cloud-defender-auth";
 const rootResolutionCache = new Map();
 
-/**
- * Resolves (and creates if needed) a Drive folder path starting from the root.
- */
 async function ensureRootFolder(driveApi, rootPath) {
     const key = rootPath && rootPath.trim() ? rootPath.trim() : "/";
     if (rootResolutionCache.has(key)) return rootResolutionCache.get(key);
@@ -45,9 +41,7 @@ async function ensureRootFolder(driveApi, rootPath) {
     return promise;
 }
 
-/**
- * Application shell: handles auth/session management and delegates to workspace UI.
- */
+
 export default function App() {
     const [user, setUser] = useState(() => {
         try {

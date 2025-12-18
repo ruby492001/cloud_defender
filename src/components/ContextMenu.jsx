@@ -1,11 +1,9 @@
-// Контекстное меню: авто-коррекция позиции, чтобы не выходить за пределы окна (без скроллов)
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export default function ContextMenu({ x, y, onClose, items }){
     const ref = useRef(null)
     const [pos, setPos] = useState({ left: x, top: y })
 
-    // Клик вне меню / Esc — закрыть
     useEffect(()=>{
         const onDoc = (e)=>{ if(ref.current && !ref.current.contains(e.target)) onClose() }
         const onEsc = (e)=>{ if(e.key==='Escape') onClose() }
@@ -14,7 +12,6 @@ export default function ContextMenu({ x, y, onClose, items }){
         return ()=>{ document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onEsc) }
     }, [onClose])
 
-    // После монтирования — замерить и скорректировать позицию, чтобы меню было полностью в вьюпорте
     useLayoutEffect(()=>{
         const el = ref.current
         if(!el) return
@@ -26,11 +23,9 @@ export default function ContextMenu({ x, y, onClose, items }){
         let left = x
         let top  = y
 
-        // если не влезает по ширине — двигаем влево
         if (left + rect.width + margin > vw) left = Math.max(margin, vw - rect.width - margin)
         if (left < margin) left = margin
 
-        // если не влезает по высоте — двигаем вверх
         if (top + rect.height + margin > vh) top = Math.max(margin, vh - rect.height - margin)
         if (top < margin) top = margin
 

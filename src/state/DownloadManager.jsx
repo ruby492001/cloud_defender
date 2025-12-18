@@ -38,9 +38,6 @@ const savedOnce = new Set()
 const canUseFileSystemSave = () => typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function'
 const STREAMING_THRESHOLD_BYTES = 300 * 1024 * 1024
 
-/**
- * Provides download queue management with progress, integrity checks and optional zipping for folders.
- */
 export function DownloadProvider({ api, children }){
     const [tasks, setTasks] = useState([])
     const running = useRef(0)

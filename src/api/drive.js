@@ -145,9 +145,6 @@ export class DriveApi {
         const meta = await this.getFileMeta(id);
         const finalName = name ?? meta.name;
         let fileSize = Number(size ?? meta.size ?? 0) || 0;
-
-        // Some Drive file types may omit `size`. Try to resolve the total using a 1-byte range request.
-        // This allows a progressive download UI instead of a 0% -> 100% jump.
         if (!fileSize) {
             try {
                 const probe = await this.fetchWithAuth(`${DRIVE_BASE}/files/${id}?alt=media`, {
@@ -163,7 +160,6 @@ export class DriveApi {
                     }
                 }
             } catch {
-                // ignore probe errors and fall back to non-progressive download
             }
         }
 

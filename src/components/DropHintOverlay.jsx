@@ -1,4 +1,3 @@
-// src/components/DropHintOverlay.jsx
 import React from "react";
 import { t } from "../strings.js";
 

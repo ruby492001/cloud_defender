@@ -138,7 +138,6 @@ export default class GoogleCryptoApi {
             return merged;
         };
 
-        // hydrate from shared cache to avoid duplicate initialization across instances
         const shared = this._getSharedState();
         if (shared.seed) {
             this._seedPayload = shared.seed;
@@ -1275,7 +1274,6 @@ export default class GoogleCryptoApi {
         }
         const normalizedMode = this.normalizeCryptoMode(this.getCryptoMode());
         const keyBytes = this.getKeyBytes();
-        // Fast-path: rclone with filename_encryption=off – return plain name (strip suffix if present).
         const cfgFileEnc = (this.currentConfig?.filenameEncryption || "").trim().toLowerCase();
         if (normalizedMode === CRYPTO_MODE_RCLONE && cfgFileEnc === "off") {
             return name.endsWith(".bin") ? name.slice(0, -4) : name;
@@ -1293,7 +1291,6 @@ export default class GoogleCryptoApi {
             });
         } catch (err) {
             if (normalizedMode === CRYPTO_MODE_RCLONE && /not an obfusc/i.test(err?.message || "")) {
-                // Name is already plain or not obfuscated; return as-is
                 return name;
             }
             console.error(
@@ -1375,7 +1372,6 @@ export default class GoogleCryptoApi {
         };
     }
     async appendCustomMetadataTail(fileId, digest, session) {
-        // TODO: persist digest/custom metadata to Drive (e.g., using files.update).
         void fileId;
         void digest;
         void session;
@@ -1430,7 +1426,6 @@ export default class GoogleCryptoApi {
             {
                 uploadSession: null,
                 downloadSession: null,
-                // Place to cache per-file encryption metadata (keys IVs etc.)
                 metadata: {},
             };
         const isDir = item?.mimeType === "application/vnd.google-apps.folder";
@@ -1869,7 +1864,7 @@ export default class GoogleCryptoApi {
             session.hash = hashCtx;
         }
         const digestSize = requiresDigest ? this.hashByteLength : 0;
-        // For rclone we still need to read the 32-byte header (magic + base nonce) up front.
+
         const ivSize =
             usesStreaming && session.mode === CRYPTO_MODE_RCLONE
                 ? RCLONE_IV_BYTE_LENGTH

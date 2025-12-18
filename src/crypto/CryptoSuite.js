@@ -1,10 +1,4 @@
-﻿// src/crypto/CryptoSuite.js
-// Utility to work with multiple crypto suites (cfb/ctr/cbc/...) via OpenSSL-WASM built with Emscripten.
-
-// -----------------------------
-// (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ) enum РґР»СЏ CFB
-// -----------------------------
-export const ALG = {
+﻿export const ALG = {
     AES_128_CFB128: 1,
     AES_256_CFB128: 2,
     CAMELLIA_128_CFB128: 3,
@@ -13,23 +7,13 @@ export const ALG = {
     ARIA_256_CFB128: 6,
 };
 
-// -----------------------------
-// HMR-СѓСЃС‚РѕР№С‡РёРІС‹Р№ РіР»РѕР±Р°Р»СЊРЅС‹Р№ СЂРµРµСЃС‚СЂ
-// -----------------------------
 const REGKEY = '__wasm_crypto_suites__';
 const registry =
     (globalThis[REGKEY] ||= new Map());
-// registry: suite -> {
-//   createModule, locateFile,
-//   rec: { promise, Module, api, listeners:Set<function> }
-// }
 
-// Р‘РµР·РѕРїР°СЃРЅС‹Р№ РґРѕСЃС‚СѓРї Рє heap (СЂР°Р±РѕС‚Р°РµС‚ Рё Р±РµР· Module.HEAPU8)
+
 function getHeapU8(M) {
-    // 1) РєР»Р°СЃСЃРёС‡РµСЃРєРёР№ СЂР°РЅС‚Р°Р№Рј вЂ” РїСЂРѕСЃС‚Рѕ РёСЃРїРѕР»СЊР·СѓРµРј
     if (M.HEAPU8) return M.HEAPU8;
-
-    // 2) РїС‹С‚Р°РµРјСЃСЏ РЅР°Р№С‚Рё Р±СѓС„РµСЂ РїР°РјСЏС‚Рё РІ СЂР°Р·РЅС‹С… РјРµСЃС‚Р°С…
     const buf =
         (M.wasmMemory && M.wasmMemory.buffer) ||           // РјРёРЅРёРјР°Р»СЊРЅС‹Р№ СЂР°РЅС‚Р°Р№Рј
         (M.asm && M.asm.memory && M.asm.memory.buffer) ||  // РєР»Р°СЃСЃРёС‡РµСЃРєРёР№ СЂР°РЅС‚Р°Р№Рј (С‡Р°СЃС‚Рѕ С‚СѓС‚)
@@ -39,15 +23,12 @@ function getHeapU8(M) {
     if (!buf) {
         throw new Error('WASM memory is not ready (no memory buffer on Module)');
     }
-
-    // 3) РєСЌС€РёСЂСѓРµРј view Рё РїРµСЂРµСЃРѕР·РґР°С‘Рј РїСЂРё СЂРѕСЃС‚Рµ РїР°РјСЏС‚Рё
     if (!M.__heapU8 || M.__heapU8.buffer !== buf) {
         M.__heapU8 = new Uint8Array(buf);
     }
     return M.__heapU8;
 }
 
-// РЎРѕР±РёСЂР°РµРј JS-API РЅР°Рґ C-С€РёРјРѕРј РїРѕ РїСЂРµС„РёРєСЃСѓ
 function buildApi(Module, suite) {
     const p = (name) => `${suite}_${name}`;
     const api = {
@@ -63,7 +44,6 @@ function buildApi(Module, suite) {
     return api;
 }
 
-// РЎРёРЅС…СЂРѕРЅРЅС‹Р№ "РґСЂР°Р№РІРµСЂ" РїРѕРІРµСЂС… РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ СЃСѓРёС‚Р°
 function makeSuiteDriver(suite) {
     return {
         ivLength(alg) {
@@ -134,14 +114,6 @@ function makeSuiteDriver(suite) {
 }
 
 export class CryptoSuite {
-    // ---- РїСѓР±Р»РёС‡РЅС‹Р№ API ----
-
-    /**
-     * Р РµРіРёСЃС‚СЂРёСЂСѓРµС‚ СЃСѓРёС‚.
-     * @param {string} suite         РёРјСЏ (e.g. 'cfb', 'ctr', 'cbc')
-     * @param {function} createModule РґРµС„РѕР»С‚РЅС‹Р№ СЌРєСЃРїРѕСЂС‚ РёР· <suite>_wasm.js
-     * @param {function} locateFile   (p:string)=>string вЂ” РїСѓС‚СЊ Рє .wasm
-     */
     static registerSuite(suite, createModule, locateFile) {
         if (registry.has(suite)) return;
         registry.set(suite, {
@@ -151,32 +123,22 @@ export class CryptoSuite {
         });
     }
 
-    /**
-     * Р”РѕР¶РґР°С‚СЊСЃСЏ РёРЅРёС†РёР°Р»РёР·Р°С†РёРё: Р»РёР±Рѕ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ СЃСѓРёС‚Р°,
-     * Р»РёР±Рѕ РІСЃРµС… Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹С… (РµСЃР»Рё suite РЅРµ СѓРєР°Р·Р°РЅ).
-     */
     static async ready(suite) {
         if (suite) {
             await CryptoSuite._ensureReady(suite);
             return;
         }
-        // РІСЃРµ Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°РЅРЅС‹Рµ
         const keys = [...registry.keys()];
         for (const k of keys) await CryptoSuite._ensureReady(k);
     }
 
-    /** РџРѕР»СѓС‡РёС‚СЊ СЃРёРЅС…СЂРѕРЅРЅС‹Р№ РґСЂР°Р№РІРµСЂ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ СЃСѓРёС‚Р° */
     static getSuite(suite) {
-        // РїСЂРѕРІРµСЂРєР° РЅР°Р»РёС‡РёСЏ API (Р±СЂРѕСЃРёС‚, РµСЃР»Рё РЅРµ РіРѕС‚РѕРІ)
         CryptoSuite._getApi(suite);
-        // РєРµС€РёСЂРѕРІР°С‚СЊ РЅРµ РѕР±СЏР·Р°С‚РµР»СЊРЅРѕ вЂ” РґСЂР°Р№РІРµСЂ Р±РµР· СЃРѕСЃС‚РѕСЏРЅРёСЏ
         return makeSuiteDriver(suite);
     }
 
-    /** РЈРґРѕР±РЅС‹Р№ Р°Р»РёР°СЃ РґР»СЏ СЃС‚Р°СЂРѕРіРѕ РєРѕРґР°: CryptoSuite.cfb() */
     static cfb() { return CryptoSuite.getSuite('cfb'); }
 
-    /** РҐСѓРєРё РґР»СЏ РЅРµ-async РєРѕРґР° */
     static isReady(suite) {
         const slot = registry.get(suite);
         return !!(slot && slot.rec.api);
@@ -188,15 +150,12 @@ export class CryptoSuite {
         slot.rec.listeners.add(cb);
     }
 
-    /** РћС‚Р»Р°РґРєР° */
     static debugGetModule(suite) {
         return registry.get(suite)?.rec?.Module ?? null;
     }
     static debugGetApi(suite) {
         return registry.get(suite)?.rec?.api ?? null;
     }
-
-    // ---- РїСЂРёРІР°С‚РЅС‹Рµ/РІСЃРїРѕРјРѕРіР°С‚РµР»СЊРЅС‹Рµ ----
 
     static async _ensureReady(suite) {
         const slot = registry.get(suite);

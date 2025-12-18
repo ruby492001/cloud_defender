@@ -21,9 +21,6 @@ import StartupSpinner from "../components/StartupSpinner.jsx";
 import { changePassword, fetchDesktopClient } from "../api/auth.js";
 import { t } from "../strings.js";
 
-/**
- * Displays the Drive workspace: lists items, handles uploads/downloads, storage actions and dialogs.
- */
 export default function AppContent({
     user,
     storageName,

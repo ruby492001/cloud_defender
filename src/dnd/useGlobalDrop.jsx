@@ -1,5 +1,4 @@
-﻿// src/dnd/useGlobalDrop.js
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     collectFolderPaths,
     ensureDriveFolders,
@@ -7,9 +6,6 @@ import {
     stripRootFromPath,
 } from "../utils/tree";
 
-/**
- * Sets up global drag-and-drop listeners and funnels dropped files/folders into the upload manager.
- */
 export default function useGlobalDrop({ api, uploadManager }) {
     const [isOver, setIsOver] = useState(false);
     const dragDepthRef = useRef(0);

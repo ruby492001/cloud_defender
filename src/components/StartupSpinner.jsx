@@ -1,8 +1,5 @@
 import React from "react";
 
-/**
- * Lightweight blocking spinner used while storage or Drive configuration initializes.
- */
 export default function StartupSpinner({ visible, message }) {
     if (!visible) return null;
     return (

@@ -7,7 +7,6 @@ async function parseResponse(response, fallbackMessage) {
     try {
         data = await response.json();
     } catch (e) {
-        // ignore parse errors, fallback below
     }
 
     if (!response.ok) {

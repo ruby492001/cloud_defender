@@ -1,4 +1,3 @@
-// src/components/UploadOverlay.jsx
 import React from "react";
 import { t } from "../strings.js";
 

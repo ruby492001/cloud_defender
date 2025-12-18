@@ -1,4 +1,3 @@
-// src/utils/tree.js
 export function getRelativePath(file) {
     return file.webkitRelativePath && file.webkitRelativePath.length > 0 ? file.webkitRelativePath : file.name;
 }

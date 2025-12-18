@@ -3,9 +3,6 @@ import { DriveApi } from "../api/drive.js";
 import { t } from "../strings.js";
 import GoogleCryptoApi from "../api/GoogleCryptoApi.js";
 
-/**
- * Drive-aware hook that wraps Drive API with crypto and tracks folder state, pagination and sorting.
- */
 export function useDrive(token, options = {}) {
     const {
         requestPassword,
